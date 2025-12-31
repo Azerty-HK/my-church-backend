@@ -1,0 +1,16 @@
+!DOCTYPE html 
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Ma page Web</title> 
+</head>
+<body>
+    <h1>Bienvenue sur ma page Web</h1>
+    <p>Ceci est un paragraphe d'exemple.</p>
+    <h2> Voici les autres paragraphe</h2>
+    <p>C'est un site web normale pour apprendre la programmation</p> 
+    <h2> Ici c'est pour parler encore un peu plus de la page Web</h2>  
+    <p>C'est un site web bien fais et réaliser par henock aduma </p>
+</body>
+</html>
+
