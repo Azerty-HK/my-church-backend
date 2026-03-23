@@ -1,3 +1,4 @@
+console.log('🏁 Tentative de démarrage du serveur MyChurch...');
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import cors from 'cors';

@@ -33,6 +33,19 @@ async function q(text: string, params: any[] = []) {
 // Initialisation – Création des tables
 // ============================================================
 export async function initDB() {
+  let retries = 5;
+  while (retries > 0) {
+    try {
+      await pool.query('SELECT 1'); // Test de connexion simple
+      break;
+    } catch (err: any) {
+      retries--;
+      console.log(`⏳ Attente de PostgreSQL (${retries} tentatives restantes)...`);
+      if (retries === 0) throw err;
+      await new Promise(res => setTimeout(res, 5000)); // Attendre 5 secondes
+    }
+  }
+
   const tables = [
     {
       name: 'churches',
