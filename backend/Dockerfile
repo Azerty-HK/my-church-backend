@@ -1,4 +1,11 @@
-FROM node:18-alpine
+FROM node:18-slim
+
+# On installe les outils de compilation car certaines dépendances en ont besoin (ex: native modules)
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -7,8 +14,6 @@ RUN npm install
 
 COPY . .
 
-# Nous compilons le TypeScript si nécessaire, ou on utilise ts-node en prod (moins recommandé mais simple ici)
-# Pour MyChurch, on va utiliser ts-node car la structure est simple
 RUN npm install -g ts-node typescript
 
 EXPOSE 3000
