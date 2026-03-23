@@ -81,19 +81,12 @@ export type Department =
   | 'Intercession' 
   | 'Évangélisation' 
   | 'Nettoyage'
+  | 'Accueil'
   | 'Autres'; 
 
 export type PaymentMethod = 'cash' | 'bank' | 'mpesa' | 'orange_money' | 'airtel_money' | 'afrimoney';
 
 export interface Member {
-  joining_date: any;
-  joining_date: string | number | Date;
-  status: string;
-  status: string;
-  payment_method: string | undefined;
-  card_number: any;
-  has_paid: any;
-  payment_date: string;
   id: string;
   church_id: string;
   first_name: string;
@@ -110,6 +103,12 @@ export interface Member {
   dossier_id?: string;
   has_dossier?: boolean;
   dossier_status?: 'incomplet' | 'en_revision' | 'complet' | 'archive';
+  joining_date?: string;
+  status: string;
+  payment_method?: string;
+  card_number?: string;
+  has_paid?: boolean;
+  payment_date?: string;
   is_active?: boolean;
   created_at?: string;
   updated_at?: string;
@@ -157,6 +156,7 @@ export interface Expense {
   approval_message?: string;
   date: string;
   created_at?: string;
+  updated_at?: string;
 }
 
 export type EventType = 'Culte' | 'Réunion' | 'Séminaire' | 'Conférence' | 'Autre';
@@ -214,12 +214,11 @@ export interface PublicLink {
 }
 
 export interface Archive {
-  period_type: string;
-  period_type: string;
   id: string;
   church_id: string;
   archive_type: 'monthly' | 'yearly';
   period: string;
+  period_type: string;
   total_income?: number;
   total_expenses?: number;
   balance?: number;

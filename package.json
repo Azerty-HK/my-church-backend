@@ -4,17 +4,11 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "EXPO_NO_TELEMETRY=1 expo start --tunnel",
-    "build:web": "expo export --platform web",
-    "lint": "expo lint",
-    "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web",
-    "init-db": "ts-node init-db.ts",
-    "init-db:with-sample": "ts-node init-db.ts --sample-data",
-    "backend": "ts-node -e \"require('dotenv/config')\" backend/server.ts",
-    "backend:init": "ts-node -e \"require('dotenv/config')\" backend/init-db.ts",
+    "start": "node backend/dist/backend/server.js",
+    "build": "tsc -p backend/tsconfig.json",
+    "dev": "ts-node backend/server.ts",
+    "init-db": "ts-node backend/init-db.ts",
+    "backend": "ts-node backend/server.ts",
     "build:backend": "tsc -p backend/tsconfig.json"
   },
   "dependencies": {

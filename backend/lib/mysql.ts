@@ -721,7 +721,7 @@ export class MyChurchMySQLService {
         if (value !== undefined && key !== 'id' && key !== 'created_at') {
           if (key === 'password_hash') {
             fields.push(`${key} = ?`);
-            values.push(await bcrypt.hash(value, 10));
+            values.push(await bcrypt.hash(value as string, 10));
           } else {
             fields.push(`${key} = ?`);
             values.push(value);
@@ -909,6 +909,12 @@ export class MyChurchMySQLService {
           dossier_id: data.dossier_id,
           has_dossier: data.has_dossier,
           dossier_status: data.dossier_status,
+          joining_date: data.joining_date,
+          status: data.status || 'Actif',
+          payment_method: data.payment_method,
+          card_number: data.card_number,
+          has_paid: data.has_paid,
+          payment_date: data.payment_date,
           is_active: true, 
           created_at: new Date().toISOString(), 
           updated_at: new Date().toISOString() 
