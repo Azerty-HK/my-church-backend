@@ -1,1486 +1,2049 @@
-import React, { useRef, useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   View, 
   Text, 
   StyleSheet, 
   Image, 
   TouchableOpacity, 
-  Alert,
+  Share,
   Platform,
+  Alert,
+  Modal,
   ScrollView,
   TextInput,
-  Dimensions,
-  ActivityIndicator
+  ActivityIndicator,
+  Linking,
+  Animated,
+  Dimensions
 } from 'react-native';
 import { 
-  Printer,
-  Download,
-  Share2,
-  Edit,
-  Trash2,
-  Save,
-  User,
-  Camera,
-  QrCode,
-  X,
-  Mail,
-  Phone,
-  MapPin,
-  Award,
-  Calendar,
-  CreditCard,
-  FileText,
-  CheckCircle,
-  Building
+  User, Mail, Phone, MapPin, QrCode, Users, Briefcase, 
+  Shield, DollarSign, Star, FolderPlus, Church, Share2, 
+  FileText, Edit, X, Save, Download, CheckCircle,
+  Calendar, Hash, Building, ShieldCheck, Image as ImageIcon,
+  Printer, CreditCard, Receipt, Copy, Eye, EyeOff, Lock,
+  AlertCircle, Info, DownloadCloud, Smartphone, Globe,
+  Award, Tag, Clock, Zap, Activity, BarChart, TrendingUp
 } from 'lucide-react-native';
-import type { Member, Church } from '../types/database';
+import { formatAmount } from '../utils/currency';
+import type { Member } from '../types/database';
+import QRCode from 'react-native-qrcode-svg';
+import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
-import QRCode from 'react-native-qrcode-svg';
-
-const { width: screenWidth } = Dimensions.get('window');
-
-// Dimensions exactes pour impression PVC
-const CARD_WIDTH = 85.6; // mm (standard carte bancaire)
-const CARD_HEIGHT = 53.98; // mm
+import { captureRef } from 'react-native-view-shot';
+import { CARD_CONFIG, BUSINESS_RULES, UI_CONSTANTS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../utils/constants';
 
 interface MemberCardProps {
   member: Member;
-  church: Church;
-  onEdit?: () => void;
-  onDelete?: () => void;
-  onUpdate?: (updatedMember: Member) => void;
-  onAddToDossier?: (pdfUri: string, dossierId?: string) => void;
+  currency: string;
+  churchName?: string;
+  churchLogo?: string;
+  onPress?: () => void;
+  onEdit?: (updatedMember: Member) => Promise<void>;
+  onDelete?: () => Promise<void>;
+  onAddToFolder?: () => void;
+  onGenerateCard?: () => Promise<void>;
+  onViewInvoice?: () => void;
+  onMakePayment?: () => void;
+  showActions?: boolean;
+  compact?: boolean;
+  theme?: 'default' | 'professional' | 'modern';
 }
 
 export function MemberCard({ 
   member, 
-  church,
-  onEdit, 
+  currency, 
+  churchName = 'MY CHURCH', 
+  churchLogo,
+  onPress, 
+  onEdit,
   onDelete,
-  onUpdate,
-  onAddToDossier
+  onAddToFolder,
+  onGenerateCard,
+  onViewInvoice,
+  onMakePayment,
+  showActions = true,
+  compact = false,
+  theme = 'default'
 }: MemberCardProps) {
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showQRModal, setShowQRModal] = useState(false);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [generatingPDF, setGeneratingPDF] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [sharing, setSharing] = useState(false);
-  const [savingToDossier, setSavingToDossier] = useState(false);
-  const qrCodeRef = useRef<any>(null);
-
-  // États pour l'édition
-  const [editedMember, setEditedMember] = useState({
-    first_name: member.first_name,
-    last_name: member.last_name,
-    email: member.email,
-    phone: member.phone || '',
-    address: member.address || '',
-    city: member.city || '',
-    department: member.department || '',
-    position: member.position || '',
-    photo_url: member.photo_url || null,
-  });
-
-  const getQRCodeData = () => {
-    return JSON.stringify({
-      id: member.id,
-      name: `${member.first_name} ${member.last_name}`,
-      type: member.member_type,
-      church: church.name,
-      church_id: church.id,
-      email: member.email,
-      phone: member.phone,
-      department: member.department,
-      dossier: member.dossier_number,
-      generated: new Date().toISOString(),
-      valid_until: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString()
-    });
-  };
-
-  const generatePrintableHTML = async (): Promise<string> => {
-    try {
-      let qrCodeBase64 = '';
-      if (qrCodeRef.current) {
-        qrCodeBase64 = await new Promise((resolve) => {
-          qrCodeRef.current?.toDataURL((data: string) => {
-            resolve(data);
-          });
-        });
-      }
-
-      // Calculer l'âge si date de naissance existe
-      const calculateAge = (birthDate: string) => {
-        if (!birthDate) return '';
-        const today = new Date();
-        const birth = new Date(birthDate);
-        let age = today.getFullYear() - birth.getFullYear();
-        const monthDiff = today.getMonth() - birth.getMonth();
-        if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
-          age--;
-        }
-        return age + ' ans';
-      };
-
-      // Déterminer la couleur selon le type de membre
-      const getCardColor = () => {
-        switch (member.member_type) {
-          case 'Personnel': return 'linear-gradient(135deg, #4b6cb7 0%, #182848 100%)';
-          case 'Membre': return 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-          case 'Ancien': return 'linear-gradient(135deg, #f46b45 0%, #eea849 100%)';
-          default: return 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-        }
-      };
-
-      const memberPhoto = member.photo_url 
-        ? `<img src="${member.photo_url}" style="width: 30mm; height: 30mm; object-fit: cover; border-radius: 4mm; border: 2px solid white; position: absolute; right: 5mm; top: 12mm; box-shadow: 0 4px 12px rgba(0,0,0,0.3);" />`
-        : `<div style="width: 30mm; height: 30mm; border: 2px solid white; border-radius: 4mm; position: absolute; right: 5mm; top: 12mm; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, rgba(255,255,255,0.2) 0%, rgba(0,0,0,0.1) 100%); box-shadow: 0 4px 12px rgba(0,0,0,0.2);">
-            <div style="font-size: 24pt; color: white; font-weight: bold; text-shadow: 0 2px 4px rgba(0,0,0,0.3);">
-              ${member.first_name.charAt(0)}${member.last_name.charAt(0)}
-            </div>
-          </div>`;
-
-      const qrCodeImage = qrCodeBase64 
-        ? `<img src="${qrCodeBase64}" style="width: 20mm; height: 20mm; position: absolute; right: 5mm; bottom: 5mm; background: white; padding: 2mm; border-radius: 3mm; box-shadow: 0 3px 8px rgba(0,0,0,0.2); border: 1px solid #e0e0e0;" />`
-        : `<div style="width: 20mm; height: 20mm; border: 2px dashed rgba(255,255,255,0.5); position: absolute; right: 5mm; bottom: 5mm; display: flex; align-items: center; justify-content: center; border-radius: 3mm; background: rgba(255,255,255,0.1);">
-            <div style="font-size: 10pt; color: rgba(255,255,255,0.7); font-weight: bold;">QR</div>
-          </div>`;
-
-      const memberTypeBadge = member.member_type === 'Personnel' 
-        ? `<div style="position: absolute; top: 5mm; left: 5mm; background: rgba(255,255,255,0.95); padding: 1.5mm 4mm; border-radius: 4mm; font-size: 9pt; font-weight: 800; color: #4b6cb7; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.5);">
-            ${member.member_type}
-          </div>`
-        : '';
-
-      // Construction de l'adresse complète avec département
-      const fullAddress = member.address 
-        ? `${member.address}${member.city ? ', ' + member.city : ''}${member.department ? ', ' + member.department : ''}`
-        : '';
-
-      return `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Carte de Membre - ${member.first_name} ${member.last_name}</title>
-          <style>
-            @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800;900&display=swap');
-            
-            * {
-              margin: 0;
-              padding: 0;
-              box-sizing: border-box;
-              font-family: 'Montserrat', sans-serif;
-            }
-            
-            body {
-              padding: 5mm;
-              background: #f5f5f5;
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              min-height: 100vh;
-            }
-            
-            .card-container {
-              width: ${CARD_WIDTH}mm;
-              height: ${CARD_HEIGHT}mm;
-              position: relative;
-              overflow: hidden;
-              border-radius: 4.5mm;
-              background: ${getCardColor()};
-              box-shadow: 0 12px 35px rgba(0,0,0,0.35);
-              color: white;
-            }
-            
-            .card-overlay {
-              position: absolute;
-              top: 0;
-              left: 0;
-              right: 0;
-              bottom: 0;
-              background: linear-gradient(135deg, rgba(255,255,255,0.15) 0%, rgba(0,0,0,0.15) 100%);
-            }
-            
-            .church-name {
-              position: absolute;
-              top: 5mm;
-              left: 5mm;
-              right: 40mm;
-              font-size: 11pt;
-              font-weight: 900;
-              text-transform: uppercase;
-              letter-spacing: 0.8px;
-              color: rgba(255,255,255,0.98);
-              text-shadow: 0 2px 4px rgba(0,0,0,0.3);
-            }
-            
-            .card-title {
-              position: absolute;
-              top: 10mm;
-              left: 5mm;
-              font-size: 15pt;
-              font-weight: 900;
-              text-transform: uppercase;
-              letter-spacing: 1.2px;
-              color: white;
-              text-shadow: 0 2px 4px rgba(0,0,0,0.3);
-            }
-            
-            .member-info {
-              position: absolute;
-              top: 20mm;
-              left: 5mm;
-              right: 40mm;
-            }
-            
-            .member-name {
-              font-size: 13pt;
-              font-weight: 900;
-              margin-bottom: 2.5mm;
-              color: white;
-              text-shadow: 0 1px 3px rgba(0,0,0,0.4);
-              line-height: 1.2;
-            }
-            
-            .member-detail {
-              font-size: 8.5pt;
-              margin-bottom: 1.2mm;
-              display: flex;
-              align-items: center;
-              color: rgba(255,255,255,0.95);
-              text-shadow: 0 1px 2px rgba(0,0,0,0.2);
-            }
-            
-            .detail-icon {
-              margin-right: 3mm;
-              font-size: 8pt;
-              min-width: 15px;
-            }
-            
-            .member-id {
-              position: absolute;
-              bottom: 5mm;
-              left: 5mm;
-              font-size: 7.5pt;
-              color: rgba(255,255,255,0.75);
-              font-weight: 700;
-              text-shadow: 0 1px 2px rgba(0,0,0,0.2);
-            }
-            
-            .validity {
-              position: absolute;
-              bottom: 5mm;
-              left: 25mm;
-              font-size: 7.5pt;
-              color: rgba(255,255,255,0.75);
-              font-weight: 700;
-              text-shadow: 0 1px 2px rgba(0,0,0,0.2);
-            }
-            
-            .signature {
-              position: absolute;
-              bottom: 2mm;
-              right: 5mm;
-              font-size: 6.5pt;
-              color: rgba(255,255,255,0.6);
-              text-align: right;
-              font-style: italic;
-              text-shadow: 0 1px 1px rgba(0,0,0,0.2);
-            }
-            
-            .dossier-badge {
-              position: absolute;
-              bottom: 2mm;
-              left: 50%;
-              transform: translateX(-50%);
-              background: rgba(255,255,255,0.2);
-              padding: 1mm 3mm;
-              border-radius: 3mm;
-              font-size: 7pt;
-              font-weight: 700;
-              color: white;
-              border: 1px solid rgba(255,255,255,0.3);
-            }
-            
-            ${memberTypeBadge}
-            
-            @media print {
-              body {
-                padding: 0;
-                background: none;
-              }
-              
-              .card-container {
-                width: ${CARD_WIDTH}mm;
-                height: ${CARD_HEIGHT}mm;
-                border-radius: 4.5mm;
-                page-break-inside: avoid;
-                margin: 0;
-                -webkit-print-color-adjust: exact;
-                print-color-adjust: exact;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="card-container">
-            <div class="card-overlay"></div>
-            
-            <!-- Badge type de membre -->
-            ${memberTypeBadge}
-            
-            <!-- Nom de l'église -->
-            <div class="church-name">${church.name}</div>
-            
-            <!-- Titre de la carte -->
-            <div class="card-title">CARTE DE MEMBRE</div>
-            
-            <!-- Informations du membre -->
-            <div class="member-info">
-              <div class="member-name">
-                ${member.first_name.toUpperCase()}<br/>${member.last_name.toUpperCase()}
-              </div>
-              
-              ${member.email ? `
-                <div class="member-detail">
-                  <span class="detail-icon">✉️</span> ${member.email}
-                </div>
-              ` : ''}
-              
-              ${member.phone ? `
-                <div class="member-detail">
-                  <span class="detail-icon">📱</span> ${member.phone}
-                </div>
-              ` : ''}
-              
-              ${fullAddress ? `
-                <div class="member-detail">
-                  <span class="detail-icon">📍</span> ${fullAddress}
-                </div>
-              ` : ''}
-              
-              ${member.position ? `
-                <div class="member-detail">
-                  <span class="detail-icon">💼</span> ${member.position}
-                </div>
-              ` : ''}
-              
-              ${member.department ? `
-                <div class="member-detail">
-                  <span class="detail-icon">🏛️</span> ${member.department}
-                </div>
-              ` : ''}
-            </div>
-            
-            <!-- Photo du membre -->
-            ${memberPhoto}
-            
-            <!-- QR Code -->
-            ${qrCodeImage}
-            
-            <!-- Informations techniques -->
-            <div class="member-id">ID: ${member.id.substring(0, 8).toUpperCase()}</div>
-            <div class="validity">
-              VALIDE JUSQU'AU: ${new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }).toUpperCase()}
-            </div>
-            
-            <!-- Numéro de dossier si existe -->
-            ${member.dossier_number ? `
-              <div class="dossier-badge">
-                📁 ${member.dossier_number}
-              </div>
-            ` : ''}
-            
-            <div class="signature">MY CHURCH • ${new Date().getFullYear()}</div>
-          </div>
-        </body>
-        </html>
-      `;
-    } catch (error) {
-      console.error('Erreur génération HTML:', error);
-      return '';
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const [processingAction, setProcessingAction] = useState(false);
+  const [editedMember, setEditedMember] = useState<Member>({...member});
+  const [cardScale] = useState(new Animated.Value(1));
+  const [pulseAnim] = useState(new Animated.Value(1));
+  
+  const cardRef = useRef<View>(null);
+  const { width } = Dimensions.get('window');
+  
+  // Effet d'animation de pulsation pour les membres actifs
+  useEffect(() => {
+    if (member.is_active) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.02,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
     }
+  }, [member.is_active]);
+
+  // Animation au survol
+  const handlePressIn = () => {
+    Animated.spring(cardScale, {
+      toValue: 0.98,
+      friction: 3,
+      useNativeDriver: true,
+    }).start();
   };
 
-  const handleExportPDF = async () => {
-    setGeneratingPDF(true);
+  const handlePressOut = () => {
+    Animated.spring(cardScale, {
+      toValue: 1,
+      friction: 3,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  // Fonctions utilitaires
+  const formatDepartments = (departments: string | string[]) => {
+    if (!departments) return 'Aucun département assigné';
+    if (Array.isArray(departments)) {
+      return departments.join(', ');
+    }
+    return departments;
+  };
+
+  const getStatusColor = () => {
+    if (!member.has_paid) return '#e74c3c'; // Non payé - rouge
+    if (!member.is_active) return '#95a5a6'; // Inactif - gris
+    return member.status === 'active' ? '#27ae60' : '#f39c12'; // Actif - vert, Autre - orange
+  };
+
+  const getStatusText = () => {
+    if (!member.has_paid) return '❌ Non payé';
+    if (!member.is_active) return '⏸️ Inactif';
+    return member.status === 'active' ? '✅ Actif' : '⚠️ ' + member.status;
+  };
+
+  const getMemberTypeIcon = () => {
+    return member.member_type === 'Personnel' ? (
+      <Briefcase size={16} color="#9b59b6" />
+    ) : (
+      <Users size={16} color="#3498db" />
+    );
+  };
+
+  const getPositionColor = () => {
+    if (!member.position) return '#7f8c8d';
+    const restrictedPositions = ['Pasteur', 'Trésorier', 'Secrétaire', 'Lecteur'];
+    return restrictedPositions.includes(member.position) ? '#e74c3c' : '#3498db';
+  };
+
+  const isRestrictedPosition = () => {
+    const restrictedPositions = ['Pasteur', 'Trésorier', 'Secrétaire', 'Lecteur'];
+    return member.position ? restrictedPositions.includes(member.position) : false;
+  };
+
+  const hasCard = () => {
+    return member.has_paid && member.card_number;
+  };
+
+  const getCardStatus = () => {
+    if (!member.has_paid) return { text: '💰 Paiement requis', color: '#e74c3c' };
+    if (!member.card_number) return { text: '🔄 Carte en attente', color: '#f39c12' };
+    return { text: '✅ Carte active', color: '#27ae60' };
+  };
+
+  const renderMemberPhoto = () => {
+    if (member.photo_url) {
+      return (
+        <Image 
+          source={{ uri: member.photo_url }} 
+          style={styles.photo} 
+          resizeMode="cover"
+        />
+      );
+    }
+    
+    return (
+      <View style={styles.photoPlaceholder}>
+        <User size={compact ? 24 : 32} color="#7f8c8d" />
+        <Text style={styles.initials}>
+          {member.first_name?.charAt(0)}{member.last_name?.charAt(0)}
+        </Text>
+      </View>
+    );
+  };
+
+  // Fonctions principales
+  const handleExportImage = async () => {
     try {
-      const html = await generatePrintableHTML();
+      setGeneratingImage(true);
       
-      if (!html) {
-        throw new Error('Impossible de générer le document');
+      if (!cardRef.current) {
+        Alert.alert('Erreur', ERROR_MESSAGES.OPERATION_FAILED);
+        return;
       }
 
-      const { uri } = await Print.printToFileAsync({
-        html,
-        base64: false,
-        width: CARD_WIDTH * 3.78, // Conversion mm en pixels
-        height: CARD_HEIGHT * 3.78,
-        margins: {
-          left: 0,
-          top: 0,
-          right: 0,
-          bottom: 0
-        }
+      const uri = await captureRef(cardRef.current, {
+        format: 'png',
+        quality: 1,
       });
 
-      const timestamp = Date.now();
-      const fileName = `Carte_Membre_${member.first_name}_${member.last_name}_${timestamp}.pdf`;
-      const newUri = `${FileSystem.documentDirectory}${fileName}`;
-      
-      await FileSystem.moveAsync({
-        from: uri,
-        to: newUri,
-      });
-
-      // Créer un dossier spécifique pour les cartes de membres
-      const cardsDirectory = `${FileSystem.documentDirectory}MyChurch/Cartes_Membres/`;
-      const dirInfo = await FileSystem.getInfoAsync(cardsDirectory);
+      const downloadDir = FileSystem.documentDirectory + 'MyChurch/Cards/';
+      const dirInfo = await FileSystem.getInfoAsync(downloadDir);
       if (!dirInfo.exists) {
-        await FileSystem.makeDirectoryAsync(cardsDirectory, { intermediates: true });
+        await FileSystem.makeDirectoryAsync(downloadDir, { intermediates: true });
       }
 
-      // Déplacer le fichier PDF dans le dossier spécifique
-      const finalUri = `${cardsDirectory}${fileName}`;
-      await FileSystem.moveAsync({
-        from: newUri,
-        to: finalUri,
-      });
+      const fileName = `Carte_${member.first_name}_${member.last_name}_${Date.now()}.png`;
+      const fileUri = downloadDir + fileName;
+      
+      await FileSystem.copyAsync({ from: uri, to: fileUri });
 
-      // Si la fonction onAddToDossier existe, proposer d'ajouter au dossier
-      if (onAddToDossier) {
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'image/png',
+          dialogTitle: `Carte Membre - ${member.first_name} ${member.last_name}`,
+          UTI: 'public.png'
+        });
+      } else {
         Alert.alert(
-          '✅ Carte générée',
-          'Que souhaitez-vous faire avec cette carte ?',
+          SUCCESS_MESSAGES.OPERATION_SUCCESSFUL,
+          `L'image a été générée avec succès !\n\n📁 Emplacement: ${fileUri}`,
           [
+            { text: 'OK', style: 'cancel' },
             {
-              text: 'Ajouter au dossier',
-              onPress: () => {
-                setSavingToDossier(true);
-                onAddToDossier(finalUri, member.dossier_number || `DOS-${member.id}`);
-                setTimeout(() => setSavingToDossier(false), 1000);
-              }
-            },
-            {
-              text: 'Partager',
-              onPress: () => handleSharePDF(finalUri)
-            },
-            {
-              text: 'Sauvegarder seulement',
-              style: 'cancel'
+              text: 'Ouvrir le dossier',
+              onPress: () => Linking.openURL(`file://${downloadDir}`).catch(() => 
+                Alert.alert('Erreur', ERROR_MESSAGES.OPERATION_FAILED)
+              )
             }
           ]
         );
-      } else {
-        // Proposer de partager
-        await handleSharePDF(finalUri);
       }
-    } catch (error: any) {
+
+    } catch (error) {
+      console.error('Erreur génération image:', error);
+      Alert.alert('Erreur', ERROR_MESSAGES.OPERATION_FAILED);
+    } finally {
+      setGeneratingImage(false);
+    }
+  };
+
+  const handleDownloadPDF = async () => {
+    try {
+      setGeneratingPDF(true);
+      
+      const htmlContent = generateInvoiceHTML();
+      
+      const { uri } = await Print.printToFileAsync({
+        html: htmlContent,
+        base64: false,
+      });
+
+      const downloadDir = FileSystem.documentDirectory + 'MyChurch/Invoices/';
+      const dirInfo = await FileSystem.getInfoAsync(downloadDir);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(downloadDir, { intermediates: true });
+      }
+
+      const fileName = `Facture_${member.first_name}_${member.last_name}_${Date.now()}.pdf`;
+      const fileUri = downloadDir + fileName;
+      
+      await FileSystem.copyAsync({ from: uri, to: fileUri });
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'application/pdf',
+          dialogTitle: `Facture - ${member.first_name} ${member.last_name}`,
+          UTI: 'com.adobe.pdf'
+        });
+      } else {
+        Alert.alert(
+          SUCCESS_MESSAGES.OPERATION_SUCCESSFUL,
+          `La facture a été générée avec succès !\n\n📁 Emplacement: ${fileUri}`,
+          [
+            { text: 'OK', style: 'cancel' },
+            {
+              text: 'Ouvrir le dossier',
+              onPress: () => Linking.openURL(`file://${downloadDir}`).catch(() => 
+                Alert.alert('Erreur', ERROR_MESSAGES.OPERATION_FAILED)
+              )
+            }
+          ]
+        );
+      }
+
+    } catch (error) {
       console.error('Erreur génération PDF:', error);
-      Alert.alert(
-        '❌ Erreur',
-        error.message || 'Impossible de générer la carte.',
-        [{ text: 'OK' }]
-      );
+      Alert.alert('Erreur', ERROR_MESSAGES.OPERATION_FAILED);
     } finally {
       setGeneratingPDF(false);
     }
   };
 
-  const handleSharePDF = async (fileUri: string) => {
-    setSharing(true);
-    try {
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(fileUri, {
-          mimeType: 'application/pdf',
-          dialogTitle: `🎴 Carte de Membre - ${member.first_name} ${member.last_name}`,
-          UTI: 'com.adobe.pdf',
-        });
-        
-        Alert.alert(
-          '✅ Succès',
-          'La carte a été générée et sauvegardée.',
-          [
-            { text: 'Voir le fichier', onPress: () => {} },
-            { text: 'OK' }
-          ]
-        );
-      } else {
-        Alert.alert(
-          '✅ PDF généré',
-          `La carte a été sauvegardée dans: ${fileUri}`,
-          [{ text: 'OK' }]
-        );
-      }
-    } catch (error: any) {
-      Alert.alert('❌ Erreur', 'Impossible de partager la carte.');
-    } finally {
-      setSharing(false);
-    }
+  const generateInvoiceHTML = () => {
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Facture - ${member.first_name} ${member.last_name}</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 0; padding: 20px; color: #333; }
+          .header { text-align: center; margin-bottom: 30px; padding-bottom: 15px; border-bottom: 3px solid #3498db; }
+          .church-name { font-size: 24px; font-weight: bold; color: #2c3e50; margin-bottom: 5px; }
+          .invoice-title { font-size: 20px; color: #3498db; margin-bottom: 5px; }
+          .invoice-subtitle { font-size: 12px; color: #7f8c8d; margin-bottom: 20px; }
+          .member-info { display: flex; margin-bottom: 30px; padding: 20px; background-color: #f8f9fa; border-radius: 8px; }
+          .photo-section { text-align: center; margin-right: 30px; }
+          .photo-placeholder { width: 80px; height: 80px; background-color: #ecf0f1; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; font-weight: bold; font-size: 24px; color: #7f8c8d; }
+          .info-section { flex: 1; }
+          .member-name { font-size: 22px; font-weight: bold; color: #2c3e50; margin-bottom: 5px; }
+          .member-type { color: #3498db; font-weight: bold; margin-bottom: 5px; }
+          .status { display: inline-block; padding: 4px 12px; border-radius: 20px; background-color: ${getStatusColor()}; color: white; font-size: 12px; font-weight: bold; }
+          .section { margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px solid #eee; }
+          .section-title { font-size: 16px; font-weight: bold; color: #2c3e50; margin-bottom: 15px; padding: 8px; background-color: #f8f9fa; border-radius: 4px; }
+          .row { display: flex; margin-bottom: 8px; }
+          .label { font-weight: bold; color: #2c3e50; width: 140px; }
+          .value { flex: 1; color: #34495e; }
+          .payment-details { background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
+          .payment-amount { font-size: 32px; font-weight: bold; color: #27ae60; text-align: center; margin: 10px 0; }
+          .footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #eee; text-align: center; font-size: 10px; color: #95a5a6; }
+          .signature { margin-top: 10px; font-weight: bold; color: #2c3e50; }
+          .restricted-badge { display: inline-block; padding: 3px 8px; background-color: #ffeaa7; color: #d35400; font-size: 11px; border-radius: 4px; margin-left: 10px; }
+          .card-info { background-color: #e3f2fd; padding: 15px; border-radius: 8px; margin: 15px 0; }
+          .card-number { font-family: monospace; font-size: 18px; color: #1976d2; font-weight: bold; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="church-name">${churchName}</div>
+          <div class="invoice-title">FACTURE OFFICIELLE - CARTE DE MEMBRE</div>
+          <div class="invoice-subtitle">Document généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR')}</div>
+        </div>
+
+        <div class="member-info">
+          <div class="photo-section">
+            <div class="photo-placeholder">
+              ${member.photo_url ? 
+                `<img src="${member.photo_url}" style="width:80px;height:80px;border-radius:50%;border:2px solid #3498db;" />` : 
+                `${member.first_name?.charAt(0)}${member.last_name?.charAt(0)}`
+              }
+            </div>
+            <span class="status">${getStatusText()}</span>
+          </div>
+          
+          <div class="info-section">
+            <div class="member-name">${member.first_name} ${member.last_name}</div>
+            <div class="member-type">${member.member_type}</div>
+            ${member.position ? `<div>${member.position} ${isRestrictedPosition() ? '<span class="restricted-badge">Rôle sensible</span>' : ''}</div>` : ''}
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">DÉTAILS DU PAIEMENT</div>
+          <div class="payment-details">
+            <div style="text-align: center;">
+              <div style="font-size: 14px; color: #7f8c8d; margin-bottom: 5px;">Montant payé</div>
+              <div class="payment-amount">$5.00 USD</div>
+              <div style="font-size: 12px; color: #7f8c8d;">Prix fixe de la carte</div>
+            </div>
+            
+            <div class="row">
+              <div class="label">Date de paiement:</div>
+              <div class="value">${member.payment_date ? new Date(member.payment_date).toLocaleDateString('fr-FR') : 'Non spécifiée'}</div>
+            </div>
+            
+            ${member.payment_method ? `
+            <div class="row">
+              <div class="label">Méthode:</div>
+              <div class="value">${member.payment_method}</div>
+            </div>
+            ` : ''}
+            
+            ${member.payment_reference ? `
+            <div class="row">
+              <div class="label">Référence:</div>
+              <div class="value">${member.payment_reference}</div>
+            </div>
+            ` : ''}
+          </div>
+        </div>
+
+        ${member.card_number ? `
+        <div class="section">
+          <div class="section-title">INFORMATIONS DE LA CARTE</div>
+          <div class="card-info">
+            <div style="text-align: center; margin-bottom: 10px;">
+              <div style="font-size: 12px; color: #7f8c8d;">Numéro de carte</div>
+              <div class="card-number">${member.card_number}</div>
+            </div>
+            
+            <div class="row">
+              <div class="label">Validité:</div>
+              <div class="value">24 mois à partir de la date d'émission</div>
+            </div>
+            
+            <div class="row">
+              <div class="label">Type:</div>
+              <div class="value">${member.member_type === 'Personnel' ? 'Carte Personnel PVC' : 'Carte Membre PVC'}</div>
+            </div>
+          </div>
+        </div>
+        ` : ''}
+
+        <div class="section">
+          <div class="section-title">COORDONNÉES DU MEMBRE</div>
+          <div class="row">
+            <div class="label">Email:</div>
+            <div class="value">${member.email}</div>
+          </div>
+          ${member.phone ? `
+          <div class="row">
+            <div class="label">Téléphone:</div>
+            <div class="value">${member.phone}</div>
+          </div>
+          ` : ''}
+          ${member.address ? `
+          <div class="row">
+            <div class="label">Adresse:</div>
+            <div class="value">${member.address}</div>
+          </div>
+          ` : ''}
+          ${member.city ? `
+          <div class="row">
+            <div class="label">Ville:</div>
+            <div class="value">${member.city}</div>
+          </div>
+          ` : ''}
+          ${member.department ? `
+          <div class="row">
+            <div class="label">Département:</div>
+            <div class="value">${member.department}</div>
+          </div>
+          ` : ''}
+        </div>
+
+        <div class="footer">
+          <div>Document officiel - ${churchName} Management System</div>
+          <div>Facture générée le: ${new Date().toLocaleDateString('fr-FR')}</div>
+          <div class="signature">${churchName} - Créé par Henock Aduma</div>
+          <div style="margin-top: 10px; font-size: 9px; color: #bdc3c7;">
+            Cette facture est générée automatiquement par le système My Church<br>
+            Pour toute question, contactez l'administration de l'église
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
   };
 
-  const handleShareCard = async () => {
-    setSharing(true);
+  const handleShare = async () => {
     try {
-      const html = await generatePrintableHTML();
-      const { uri } = await Print.printToFileAsync({
-        html,
-        base64: false,
+      const memberInfo = `
+🎪 Église: ${churchName}
+📅 Facture générée: ${new Date().toLocaleDateString('fr-FR')}
+
+👤 INFORMATIONS DU MEMBRE
+• Nom complet: ${member.first_name} ${member.last_name}
+• Type: ${member.member_type}
+• Statut: ${getStatusText()}
+${member.position ? `• Poste: ${member.position}${isRestrictedPosition() ? ' (Rôle sensible)' : ''}\n` : ''}
+
+💰 DÉTAILS DE PAIEMENT
+• Montant: $5.00 USD
+• Statut paiement: ${member.has_paid ? '✅ Payé' : '❌ Non payé'}
+${member.payment_date ? `• Date paiement: ${new Date(member.payment_date).toLocaleDateString('fr-FR')}\n` : ''}
+${member.payment_method ? `• Méthode: ${member.payment_method}\n` : ''}
+${member.card_number ? `• Numéro carte: ${member.card_number}\n` : ''}
+
+📞 COORDONNÉES
+• Email: ${member.email}
+${member.phone ? `• Téléphone: ${member.phone}\n` : ''}
+${member.address ? `• Adresse: ${member.address}\n` : ''}
+${member.city ? `• Ville: ${member.city}\n` : ''}
+${member.department ? `• Département: ${member.department}\n` : ''}
+
+🏛️ Système: My Church Management
+✨ Créé par: Henock Aduma
+      `.trim();
+
+      await Share.share({
+        message: memberInfo,
+        title: `${member.member_type} - ${member.first_name} ${member.last_name} | ${churchName}`,
+        ...(Platform.OS === 'android' && { dialogTitle: 'Partager les informations' })
       });
 
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
-          mimeType: 'application/pdf',
-          dialogTitle: `Partager la carte de ${member.first_name} ${member.last_name}`,
-          UTI: 'com.adobe.pdf',
-        });
-      }
     } catch (error) {
-      Alert.alert('❌ Erreur', 'Impossible de partager la carte.');
-    } finally {
-      setSharing(false);
+      console.error('Erreur partage:', error);
+      Alert.alert('Erreur', ERROR_MESSAGES.OPERATION_FAILED);
     }
   };
 
   const handleSaveEdit = async () => {
+    if (!onEdit) {
+      setShowEditModal(false);
+      return;
+    }
+
     try {
-      const updatedMember = {
-        ...member,
-        ...editedMember
-      };
-
-      if (onUpdate) {
-        await onUpdate(updatedMember);
-      }
-
-      setEditing(false);
-      Alert.alert('✅ Succès', 'Les modifications ont été sauvegardées.');
+      setProcessingAction(true);
+      await onEdit(editedMember);
+      setShowEditModal(false);
+      Alert.alert('Succès', SUCCESS_MESSAGES.MEMBER_UPDATED);
     } catch (error) {
-      Alert.alert('❌ Erreur', 'Impossible de sauvegarder les modifications.');
+      console.error('Erreur édition:', error);
+      Alert.alert('Erreur', ERROR_MESSAGES.OPERATION_FAILED);
+    } finally {
+      setProcessingAction(false);
     }
   };
 
-  const confirmDelete = () => {
+  const handleDelete = async () => {
+    if (!onDelete) return;
+
     Alert.alert(
       'Confirmer la suppression',
-      `Êtes-vous sûr de vouloir supprimer ${member.first_name} ${member.last_name} ? Cette action est irréversible.`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        { 
-          text: 'Supprimer', 
-          style: 'destructive',
-          onPress: onDelete
-        },
-      ]
-    );
-  };
-
-  const handleCreateDossier = () => {
-    Alert.alert(
-      'Créer un dossier',
-      'Voulez-vous créer un dossier pour ce membre ?',
+      `Voulez-vous vraiment supprimer ${member.first_name} ${member.last_name} ?`,
       [
         { text: 'Annuler', style: 'cancel' },
         {
-          text: 'Créer avec la carte',
+          text: 'Supprimer',
+          style: 'destructive',
           onPress: async () => {
             try {
-              // D'abord générer la carte
-              await handleExportPDF();
-              
-              // Ensuite créer le dossier
-              Alert.alert(
-                '✅ Dossier créé',
-                'Le dossier a été créé avec succès et la carte y a été ajoutée.',
-                [{ text: 'OK' }]
-              );
+              setProcessingAction(true);
+              await onDelete();
+              Alert.alert('Succès', SUCCESS_MESSAGES.MEMBER_DELETED);
             } catch (error) {
-              Alert.alert('❌ Erreur', 'Impossible de créer le dossier.');
+              console.error('Erreur suppression:', error);
+              Alert.alert('Erreur', ERROR_MESSAGES.OPERATION_FAILED);
+            } finally {
+              setProcessingAction(false);
             }
-          }
-        },
-        {
-          text: 'Créer vide',
-          onPress: () => {
-            Alert.alert('Dossier vide créé', 'Le dossier a été créé sans documents.');
           }
         }
       ]
     );
   };
 
-  if (editing) {
+  const handleGenerateCard = async () => {
+    if (!onGenerateCard) return;
+    
+    if (!member.has_paid) {
+      Alert.alert(
+        'Paiement requis',
+        'Le paiement de 5 $ est requis pour générer la carte.\n\n' +
+        'Cette règle s\'applique aux membres et au personnel.',
+        [
+          { text: 'Annuler', style: 'cancel' },
+          {
+            text: 'Effectuer le paiement',
+            onPress: () => {
+              setShowPaymentModal(true);
+              if (onMakePayment) onMakePayment();
+            }
+          }
+        ]
+      );
+      return;
+    }
+
+    try {
+      setProcessingAction(true);
+      await onGenerateCard();
+      Alert.alert('Succès', SUCCESS_MESSAGES.CARD_GENERATED);
+    } catch (error) {
+      console.error('Erreur génération carte:', error);
+      Alert.alert('Erreur', ERROR_MESSAGES.OPERATION_FAILED);
+    } finally {
+      setProcessingAction(false);
+    }
+  };
+
+  // Rendu conditionnel selon le mode compact
+  if (compact) {
     return (
-      <View style={styles.editingCard}>
-        <View style={styles.editHeader}>
-          <Text style={styles.editTitle}>✏️ Modifier le membre</Text>
-          <TouchableOpacity onPress={() => setEditing(false)} style={styles.cancelButton}>
-            <X size={20} color="#e74c3c" />
-          </TouchableOpacity>
+      <TouchableOpacity
+        activeOpacity={0.7}
+        onPress={onPress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        style={[styles.compactContainer, { transform: [{ scale: cardScale }] }]}
+      >
+        <View style={styles.compactContent}>
+          <View style={styles.compactLeft}>
+            {renderMemberPhoto()}
+            <View style={[styles.compactStatusDot, { backgroundColor: getStatusColor() }]} />
+          </View>
+          
+          <View style={styles.compactCenter}>
+            <Text style={styles.compactName} numberOfLines={1}>
+              {member.first_name} {member.last_name}
+            </Text>
+            <View style={styles.compactMeta}>
+              <Text style={styles.compactType}>
+                {getMemberTypeIcon()} {member.member_type}
+              </Text>
+              {member.position && (
+                <Text style={styles.compactPosition} numberOfLines={1}>
+                  • {member.position}
+                </Text>
+              )}
+            </View>
+          </View>
+          
+          <View style={styles.compactRight}>
+            <View style={[styles.compactPaymentBadge, { 
+              backgroundColor: member.has_paid ? '#27ae60' : '#e74c3c' 
+            }]}>
+              <Text style={styles.compactPaymentText}>
+                {member.has_paid ? '$5 ✓' : '$5 ✗'}
+              </Text>
+            </View>
+          </View>
         </View>
-
-        <ScrollView style={styles.editForm} showsVerticalScrollIndicator={false}>
-          <View style={styles.photoEditContainer}>
-            {member.photo_url ? (
-              <Image source={{ uri: member.photo_url }} style={styles.editPhoto} />
-            ) : (
-              <View style={styles.editPhotoPlaceholder}>
-                <User size={40} color="#bdc3c7" />
-              </View>
-            )}
-            <TouchableOpacity style={styles.changePhotoButton}>
-              <Camera size={16} color="white" />
-              <Text style={styles.changePhotoText}>Changer photo</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.editRow}>
-            <View style={[styles.editField, { flex: 1 }]}>
-              <Text style={styles.editLabel}>Prénom</Text>
-              <TextInput
-                style={styles.editInput}
-                value={editedMember.first_name}
-                onChangeText={(text) => setEditedMember(prev => ({ ...prev, first_name: text }))}
-                placeholder="Prénom"
-              />
-            </View>
-
-            <View style={[styles.editField, { flex: 1, marginLeft: 10 }]}>
-              <Text style={styles.editLabel}>Nom</Text>
-              <TextInput
-                style={styles.editInput}
-                value={editedMember.last_name}
-                onChangeText={(text) => setEditedMember(prev => ({ ...prev, last_name: text }))}
-                placeholder="Nom"
-              />
-            </View>
-          </View>
-
-          <View style={styles.editField}>
-            <Text style={styles.editLabel}>Email</Text>
-            <TextInput
-              style={styles.editInput}
-              value={editedMember.email}
-              onChangeText={(text) => setEditedMember(prev => ({ ...prev, email: text }))}
-              placeholder="Email"
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-          </View>
-
-          <View style={styles.editField}>
-            <Text style={styles.editLabel}>Téléphone</Text>
-            <TextInput
-              style={styles.editInput}
-              value={editedMember.phone}
-              onChangeText={(text) => setEditedMember(prev => ({ ...prev, phone: text }))}
-              placeholder="Téléphone"
-              keyboardType="phone-pad"
-            />
-          </View>
-
-          <View style={styles.editField}>
-            <Text style={styles.editLabel}>Adresse</Text>
-            <TextInput
-              style={styles.editInput}
-              value={editedMember.address}
-              onChangeText={(text) => setEditedMember(prev => ({ ...prev, address: text }))}
-              placeholder="Adresse"
-            />
-          </View>
-
-          <View style={styles.editRow}>
-            <View style={[styles.editField, { flex: 1 }]}>
-              <Text style={styles.editLabel}>Ville</Text>
-              <TextInput
-                style={styles.editInput}
-                value={editedMember.city}
-                onChangeText={(text) => setEditedMember(prev => ({ ...prev, city: text }))}
-                placeholder="Ville"
-              />
-            </View>
-
-            <View style={[styles.editField, { flex: 1, marginLeft: 10 }]}>
-              <Text style={styles.editLabel}>Département</Text>
-              <TextInput
-                style={styles.editInput}
-                value={editedMember.department}
-                onChangeText={(text) => setEditedMember(prev => ({ ...prev, department: text }))}
-                placeholder="Département"
-              />
-            </View>
-          </View>
-
-          {member.member_type === 'Personnel' && (
-            <View style={styles.editField}>
-              <Text style={styles.editLabel}>Poste</Text>
-              <TextInput
-                style={styles.editInput}
-                value={editedMember.position}
-                onChangeText={(text) => setEditedMember(prev => ({ ...prev, position: text }))}
-                placeholder="Poste"
-              />
-            </View>
-          )}
-
-          <View style={styles.editActions}>
-            <TouchableOpacity style={styles.saveButton} onPress={handleSaveEdit}>
-              <Save size={18} color="white" />
-              <Text style={styles.saveButtonText}>Sauvegarder</Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
-      </View>
+      </TouchableOpacity>
     );
   }
 
-  // Déterminer la couleur selon le type de membre
-  const getCardGradient = () => {
-    switch (member.member_type) {
-      case 'Personnel':
-        return ['#4b6cb7', '#182848'];
-      case 'Ancien':
-        return ['#f46b45', '#eea849'];
-      default:
-        return ['#667eea', '#764ba2'];
-    }
-  };
-
-  // Construction de l'adresse complète avec département pour l'affichage
-  const fullAddress = member.address 
-    ? `${member.address}${member.city ? ', ' + member.city : ''}${member.department ? ', ' + member.department : ''}`
-    : '';
-
   return (
-    <View style={styles.container}>
-      {/* QR Code caché pour l'impression */}
-      <View style={styles.hiddenQRCode}>
-        <QRCode
-          ref={qrCodeRef}
-          value={getQRCodeData()}
-          size={250}
-          color="#2c3e50"
-          backgroundColor="white"
-          getRef={(ref) => (qrCodeRef.current = ref)}
-          logoSize={50}
-          logoBackgroundColor="white"
-        />
-      </View>
-
-      {/* Titre de la carte */}
-      <View style={styles.cardHeader}>
-        <Text style={styles.cardTypeTitle}>
-          {member.member_type === 'Personnel' ? '🛡️ CARTE PERSONNEL' : '🎴 CARTE MEMBRE'}
-        </Text>
-        <Text style={styles.cardSubtitle}>Format PVC 85.6mm × 53.98mm</Text>
-        {member.dossier_number && (
-          <View style={styles.dossierBadge}>
-            <FileText size={12} color="#3498db" />
-            <Text style={styles.dossierBadgeText}>{member.dossier_number}</Text>
-          </View>
-        )}
-      </View>
-
-      {/* Prévisualisation de la carte */}
-      <View style={[
-        styles.cardPreview,
+    <Animated.View 
+      style={[
+        styles.container, 
         { 
-          backgroundColor: getCardGradient()[0],
-          shadowColor: getCardGradient()[0]
+          transform: [
+            { scale: cardScale },
+            { scale: pulseAnim }
+          ]
         }
-      ]}>
-        {/* Overlay gradient */}
-        <View style={[
-          styles.cardOverlay,
-          { backgroundColor: getCardGradient()[1] }
-        ]} />
+      ]}
+      ref={cardRef}
+    >
+      {/* En-tête avec actions */}
+      <View style={styles.header}>
+        <View style={styles.churchInfo}>
+          {churchLogo ? (
+            <Image source={{ uri: churchLogo }} style={styles.churchLogo} />
+          ) : (
+            <Church size={20} color="#3498db" />
+          )}
+          <Text style={styles.churchName} numberOfLines={1}>
+            {churchName}
+          </Text>
+        </View>
         
-        {/* Badge type de membre */}
-        {member.member_type === 'Personnel' && (
-          <View style={styles.typeBadge}>
-            <Award size={12} color="#4b6cb7" />
-            <Text style={styles.typeBadgeText}>{member.member_type}</Text>
+        <View style={styles.headerActions}>
+          {showActions && (
+            <>
+              <TouchableOpacity 
+                style={[styles.headerAction, styles.shareAction]} 
+                onPress={handleShare}
+              >
+                <Share2 size={18} color="white" />
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.headerAction, styles.exportAction]} 
+                onPress={() => setShowExportModal(true)}
+              >
+                <Download size={18} color="white" />
+              </TouchableOpacity>
+
+              {onEdit && (
+                <TouchableOpacity 
+                  style={[styles.headerAction, styles.editAction]} 
+                  onPress={() => setShowEditModal(true)}
+                >
+                  <Edit size={18} color="white" />
+                </TouchableOpacity>
+              )}
+            </>
+          )}
+        </View>
+      </View>
+
+      {/* Carte principale */}
+      <View style={[
+        styles.card, 
+        theme === 'professional' && styles.cardProfessional,
+        theme === 'modern' && styles.cardModern
+      ]}>
+        {/* Section statut paiement */}
+        <View style={styles.paymentStatusBadge}>
+          <View style={[styles.paymentDot, { backgroundColor: getStatusColor() }]} />
+          <Text style={[styles.paymentText, { color: getStatusColor() }]}>
+            {getStatusText()}
+          </Text>
+          {!member.has_paid && onMakePayment && (
+            <TouchableOpacity 
+              style={styles.payNowButton}
+              onPress={() => {
+                setShowPaymentModal(true);
+                if (onMakePayment) onMakePayment();
+              }}
+            >
+              <Text style={styles.payNowText}>Payer 5$</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Informations principales */}
+        <View style={styles.memberHeader}>
+          <View style={styles.photoContainer}>
+            {renderMemberPhoto()}
+          </View>
+          
+          <View style={styles.memberInfo}>
+            <Text style={styles.memberName}>
+              {member.first_name} {member.last_name}
+            </Text>
+            
+            <View style={styles.typeContainer}>
+              <View style={styles.typeBadge}>
+                {getMemberTypeIcon()}
+                <Text style={styles.memberType}>{member.member_type}</Text>
+              </View>
+              
+              {member.position && (
+                <View style={[
+                  styles.positionBadge,
+                  isRestrictedPosition() && styles.restrictedPositionBadge
+                ]}>
+                  <Briefcase size={12} color={isRestrictedPosition() ? '#e74c3c' : '#3498db'} />
+                  <Text style={[
+                    styles.positionText,
+                    { color: isRestrictedPosition() ? '#e74c3c' : '#3498db' }
+                  ]}>
+                    {member.position}
+                  </Text>
+                  {isRestrictedPosition() && <Shield size={10} color="#e74c3c" />}
+                </View>
+              )}
+            </View>
+            
+            <View style={styles.contactInfo}>
+              {member.phone && (
+                <View style={styles.contactItem}>
+                  <Phone size={14} color="#7f8c8d" />
+                  <Text style={styles.contactText}>{member.phone}</Text>
+                </View>
+              )}
+              
+              <View style={styles.contactItem}>
+                <Mail size={14} color="#7f8c8d" />
+                <Text style={styles.contactText}>{member.email}</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* Informations de carte */}
+        {hasCard() ? (
+          <View style={styles.cardInfoSection}>
+            <View style={styles.cardInfoHeader}>
+              <CreditCard size={18} color="#3498db" />
+              <Text style={styles.cardInfoTitle}>Informations de la carte</Text>
+            </View>
+            
+            <View style={styles.cardNumberContainer}>
+              <Text style={styles.cardNumberLabel}>Numéro de carte:</Text>
+              <Text style={styles.cardNumber}>{member.card_number}</Text>
+              <TouchableOpacity onPress={() => {
+                Alert.alert('Copié', 'Numéro de carte copié dans le presse-papier');
+                // Ici, vous devrez implémenter la copie avec Clipboard
+              }}>
+                <Copy size={16} color="#3498db" />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.cardActions}>
+              <TouchableOpacity 
+                style={[styles.cardAction, styles.viewCardAction]}
+                onPress={() => setShowDetailsModal(true)}
+              >
+                <Eye size={16} color="white" />
+                <Text style={styles.cardActionText}>Voir la carte</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.cardAction, styles.viewInvoiceAction]}
+                onPress={() => {
+                  setShowDetailsModal(true);
+                  if (onViewInvoice) onViewInvoice();
+                }}
+              >
+                <Receipt size={16} color="white" />
+                <Text style={styles.cardActionText}>Facture</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.noCardSection}>
+            <View style={styles.noCardIcon}>
+              <CreditCard size={24} color="#95a5a6" />
+            </View>
+            <Text style={styles.noCardText}>
+              {member.has_paid ? 'Carte en cours de génération...' : 'Carte non générée'}
+            </Text>
+            {onGenerateCard && (
+              <TouchableOpacity 
+                style={styles.generateCardButton}
+                onPress={handleGenerateCard}
+                disabled={processingAction}
+              >
+                {processingAction ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <Text style={styles.generateCardText}>
+                    {member.has_paid ? 'Générer la carte' : 'Payer et générer'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
-        {/* Nom de l'église */}
-        <View style={[
-          styles.churchNameContainer,
-          { left: member.member_type === 'Personnel' ? 70 : 12 }
-        ]}>
-          <Text style={styles.churchName} numberOfLines={1}>
-            {church?.name || 'ÉGLISE LOCALE'}
-          </Text>
+        {/* Détails supplémentaires */}
+        <View style={styles.detailsSection}>
+          {(member.address || member.city || member.department) && (
+            <View style={styles.detailsRow}>
+              {member.address && (
+                <View style={styles.detailItem}>
+                  <MapPin size={14} color="#7f8c8d" />
+                  <Text style={styles.detailText}>{member.address}</Text>
+                </View>
+              )}
+              
+              {member.city && (
+                <View style={styles.detailItem}>
+                  <Building size={14} color="#7f8c8d" />
+                  <Text style={styles.detailText}>{member.city}</Text>
+                </View>
+              )}
+              
+              {member.department && (
+                <View style={styles.detailItem}>
+                  <Users size={14} color="#7f8c8d" />
+                  <Text style={styles.detailText}>{member.department}</Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {member.departments && (
+            <View style={styles.departmentsRow}>
+              <Text style={styles.departmentsTitle}>Départements:</Text>
+              <Text style={styles.departmentsList}>
+                {formatDepartments(member.departments)}
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.datesRow}>
+            <View style={styles.dateItem}>
+              <Calendar size={12} color="#7f8c8d" />
+              <Text style={styles.dateText}>
+                Inscrit: {new Date(member.created_at || Date.now()).toLocaleDateString('fr-FR')}
+              </Text>
+            </View>
+            
+            {member.registration_date && (
+              <View style={styles.dateItem}>
+                <Clock size={12} color="#7f8c8d" />
+                <Text style={styles.dateText}>
+                  Enregistré: {new Date(member.registration_date).toLocaleDateString('fr-FR')}
+                </Text>
+              </View>
+            )}
+          </View>
         </View>
 
-        {/* Titre de la carte */}
-        <Text style={styles.cardTitlePreview}>CARTE DE MEMBRE</Text>
-
-        {/* Informations du membre */}
-        <View style={styles.memberInfoPreview}>
-          <Text style={styles.memberNamePreview}>
-            {member.first_name.toUpperCase()}
-          </Text>
-          <Text style={styles.memberLastNamePreview}>
-            {member.last_name.toUpperCase()}
-          </Text>
-
-          {member.email && (
-            <View style={styles.detailRow}>
-              <Mail size={10} color="rgba(255,255,255,0.95)" />
-              <Text style={styles.detailText} numberOfLines={1}>
-                {member.email}
-              </Text>
-            </View>
-          )}
-
-          {member.phone && (
-            <View style={styles.detailRow}>
-              <Phone size={10} color="rgba(255,255,255,0.95)" />
-              <Text style={styles.detailText}>
-                {member.phone}
-              </Text>
-            </View>
-          )}
-
-          {fullAddress && (
-            <View style={styles.detailRow}>
-              <MapPin size={10} color="rgba(255,255,255,0.95)" />
-              <Text style={styles.detailText} numberOfLines={2}>
-                {fullAddress}
-              </Text>
-            </View>
-          )}
-
-          {member.position && (
-            <View style={styles.detailRow}>
-              <CreditCard size={10} color="rgba(255,255,255,0.95)" />
-              <Text style={styles.detailText}>
-                {member.position}
-              </Text>
-            </View>
-          )}
-
-          {member.department && (
-            <View style={styles.detailRow}>
-              <Building size={10} color="rgba(255,255,255,0.95)" />
-              <Text style={styles.detailText}>
-                {member.department}
-              </Text>
-            </View>
-          )}
-        </View>
-
-        {/* Photo du membre */}
-        <View style={styles.photoContainerPreview}>
-          {member.photo_url ? (
-            <Image 
-              source={{ uri: member.photo_url }} 
-              style={styles.memberPhotoPreview}
-              resizeMode="cover"
-            />
-          ) : (
-            <View style={styles.photoPlaceholderPreview}>
-              <Text style={styles.photoInitials}>
-                {member.first_name.charAt(0)}{member.last_name.charAt(0)}
-              </Text>
-            </View>
-          )}
-        </View>
-
-        {/* QR Code */}
-        <View style={styles.qrContainerPreview}>
-          <QRCode
-            value={getQRCodeData()}
-            size={65}
-            color="#000000"
-            backgroundColor="white"
-            logoSize={15}
-            logoBackgroundColor="white"
-          />
-        </View>
-
-        {/* Informations techniques */}
-        <View style={styles.techInfo}>
-          <Text style={styles.memberId}>
-            ID: {member.id.substring(0, 8).toUpperCase()}
-          </Text>
-          <Text style={styles.validity}>
-            VALIDE JUSQU'AU: {new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }).toUpperCase()}
-          </Text>
-        </View>
-
-        {/* Numéro de dossier */}
-        {member.dossier_number && (
-          <View style={styles.dossierContainer}>
-            <Text style={styles.dossierText}>📁 {member.dossier_number}</Text>
+        {/* Actions */}
+        {showActions && (
+          <View style={styles.actionsSection}>
+            {onAddToFolder && (
+              <TouchableOpacity 
+                style={[styles.actionButton, styles.folderButton]}
+                onPress={onAddToFolder}
+              >
+                <FolderPlus size={18} color="white" />
+                <Text style={styles.actionButtonText}>Ajouter au dossier</Text>
+              </TouchableOpacity>
+            )}
+            
+            {member.qr_code && (
+              <TouchableOpacity 
+                style={[styles.actionButton, styles.qrButton]}
+                onPress={() => setShowQRModal(true)}
+              >
+                <QrCode size={18} color="white" />
+                <Text style={styles.actionButtonText}>QR Code</Text>
+              </TouchableOpacity>
+            )}
+            
+            {onDelete && (
+              <TouchableOpacity 
+                style={[styles.actionButton, styles.deleteButton]}
+                onPress={handleDelete}
+                disabled={processingAction}
+              >
+                {processingAction ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <Text style={styles.actionButtonText}>Supprimer</Text>
+                )}
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
         {/* Signature */}
-        <View style={styles.signaturePreview}>
-          <Text style={styles.signatureText}>MY CHURCH • {new Date().getFullYear()}</Text>
+        <View style={styles.signature}>
+          <Star size={10} color="#f39c12" />
+          <Text style={styles.signatureText}>✨ {churchName} Management System</Text>
+          <Star size={10} color="#f39c12" />
         </View>
       </View>
 
-      {/* Actions principales */}
-      <View style={styles.actionsContainer}>
-        <TouchableOpacity 
-          style={[styles.actionButton, styles.pdfButton]} 
-          onPress={handleExportPDF}
-          disabled={generatingPDF}
-        >
-          {generatingPDF ? (
-            <ActivityIndicator size="small" color="white" />
-          ) : (
-            <>
-              <Download size={18} color="white" />
-              <Text style={styles.actionButtonText}>Générer PDF</Text>
-            </>
-          )}
-        </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[styles.actionButton, styles.shareButton]} 
-          onPress={handleShareCard}
-          disabled={sharing}
-        >
-          {sharing ? (
-            <ActivityIndicator size="small" color="white" />
-          ) : (
-            <>
-              <Share2 size={18} color="white" />
-              <Text style={styles.actionButtonText}>Partager</Text>
-            </>
-          )}
-        </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[styles.actionButton, styles.printButton]} 
-          onPress={() => Alert.alert('Impression', 'Prêt pour impression PVC\n\nFormat: 85.6mm × 53.98mm', [{ text: 'OK' }])}
-        >
-          <Printer size={18} color="white" />
-          <Text style={styles.actionButtonText}>Imprimer</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Boutons admin */}
-      <View style={styles.adminActions}>
-        <TouchableOpacity 
-          style={[styles.adminButton, styles.qrButton]} 
-          onPress={() => Alert.alert(
-            'QR Code', 
-            `Code d'identification du membre\n\nScannez ce code pour vérifier les informations du membre.\n\nID: ${member.id}`,
-            [{ text: 'OK' }]
-          )}
-        >
-          <QrCode size={16} color="white" />
-          <Text style={styles.adminButtonText}>Voir QR</Text>
-        </TouchableOpacity>
-        
-        {!member.has_dossier && onAddToDossier && (
-          <TouchableOpacity 
-            style={[styles.adminButton, styles.dossierButton]} 
-            onPress={handleCreateDossier}
-            disabled={savingToDossier}
-          >
-            {savingToDossier ? (
-              <ActivityIndicator size="small" color="white" />
-            ) : (
-              <>
-                <FileText size={16} color="white" />
-                <Text style={styles.adminButtonText}>Créer Dossier</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        )}
-        
-        {onEdit && (
-          <TouchableOpacity 
-            style={[styles.adminButton, styles.editButton]} 
-            onPress={() => setEditing(true)}
-          >
-            <Edit size={16} color="white" />
-            <Text style={styles.adminButtonText}>Modifier</Text>
-          </TouchableOpacity>
-        )}
-        
-        {onDelete && (
-          <TouchableOpacity 
-            style={[styles.adminButton, styles.deleteButton]} 
-            onPress={confirmDelete}
-          >
-            <Trash2 size={16} color="white" />
-            <Text style={styles.adminButtonText}>Supprimer</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    </View>
+      {/* Modals */}
+      {renderEditModal()}
+      {renderExportModal()}
+      {renderQRModal()}
+      {renderDetailsModal()}
+      {renderPaymentModal()}
+    </Animated.View>
   );
+
+  // Fonctions de rendu des modals
+  function renderEditModal() {
+    return (
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={showEditModal}
+        onRequestClose={() => setShowEditModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Modifier le membre</Text>
+            <TouchableOpacity onPress={() => setShowEditModal(false)}>
+              <X size={24} color="#2c3e50" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView style={styles.modalContent}>
+            {/* Contenu du modal d'édition */}
+            <Text style={styles.modalNote}>
+              ⚠️ Modifiez avec précaution. Certains changements peuvent affecter la carte existante.
+            </Text>
+            
+            {/* Formulaire d'édition */}
+            <View style={styles.editSection}>
+              <Text style={styles.sectionTitle}>Informations de base</Text>
+              
+              <View style={styles.inputRow}>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Prénom *</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={editedMember.first_name}
+                    onChangeText={(text) => setEditedMember({...editedMember, first_name: text})}
+                    placeholder="Prénom"
+                  />
+                </View>
+                
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Nom *</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={editedMember.last_name}
+                    onChangeText={(text) => setEditedMember({...editedMember, last_name: text})}
+                    placeholder="Nom"
+                  />
+                </View>
+              </View>
+              
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Type de membre *</Text>
+                <View style={styles.typeOptions}>
+                  {(['Membre', 'Personnel'] as const).map((type) => (
+                    <TouchableOpacity
+                      key={type}
+                      style={[
+                        styles.typeOption,
+                        editedMember.member_type === type && styles.typeOptionActive
+                      ]}
+                      onPress={() => setEditedMember({...editedMember, member_type: type})}
+                    >
+                      <Text style={[
+                        styles.typeOptionText,
+                        editedMember.member_type === type && styles.typeOptionTextActive
+                      ]}>
+                        {type}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+              
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Poste</Text>
+                <TextInput
+                  style={styles.input}
+                  value={editedMember.position || ''}
+                  onChangeText={(text) => setEditedMember({...editedMember, position: text})}
+                  placeholder="Poste (optionnel)"
+                />
+              </View>
+            </View>
+            
+            {/* Plus de sections... */}
+          </ScrollView>
+          
+          <View style={styles.modalActions}>
+            <TouchableOpacity 
+              style={[styles.modalButton, styles.cancelButton]} 
+              onPress={() => setShowEditModal(false)}
+            >
+              <Text style={styles.cancelButtonText}>Annuler</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.modalButton, styles.saveButton]} 
+              onPress={handleSaveEdit}
+              disabled={processingAction}
+            >
+              {processingAction ? (
+                <ActivityIndicator size="small" color="white" />
+              ) : (
+                <>
+                  <Save size={20} color="white" />
+                  <Text style={styles.saveButtonText}>Enregistrer</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
+  function renderExportModal() {
+    return (
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={showExportModal}
+        onRequestClose={() => setShowExportModal(false)}
+      >
+        <View style={styles.exportModalContainer}>
+          <View style={styles.exportModalHeader}>
+            <Text style={styles.exportModalTitle}>Options d'export</Text>
+            <TouchableOpacity onPress={() => setShowExportModal(false)}>
+              <X size={24} color="#2c3e50" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.exportOptions}>
+            <Text style={styles.exportOptionsTitle}>Exporter les informations</Text>
+            <Text style={styles.exportOptionsSubtitle}>Choisissez le format d'export</Text>
+            
+            <TouchableOpacity 
+              style={[styles.exportOption, styles.pdfOption]} 
+              onPress={handleDownloadPDF}
+              disabled={generatingPDF}
+            >
+              {generatingPDF ? (
+                <View style={styles.exportOptionLoading}>
+                  <ActivityIndicator size="small" color="white" />
+                  <Text style={styles.exportOptionText}>Génération PDF...</Text>
+                </View>
+              ) : (
+                <View style={styles.exportOptionContent}>
+                  <FileText size={24} color="white" />
+                  <View style={styles.exportOptionInfo}>
+                    <Text style={styles.exportOptionTitle}>Exporter en PDF</Text>
+                    <Text style={styles.exportOptionDesc}>Facture format A4</Text>
+                  </View>
+                </View>
+              )}
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.exportOption, styles.imageOption]} 
+              onPress={handleExportImage}
+              disabled={generatingImage}
+            >
+              {generatingImage ? (
+                <View style={styles.exportOptionLoading}>
+                  <ActivityIndicator size="small" color="white" />
+                  <Text style={styles.exportOptionText}>Génération image...</Text>
+                </View>
+              ) : (
+                <View style={styles.exportOptionContent}>
+                  <ImageIcon size={24} color="white" />
+                  <View style={styles.exportOptionInfo}>
+                    <Text style={styles.exportOptionTitle}>Exporter en Image</Text>
+                    <Text style={styles.exportOptionDesc}>Capture au format PNG</Text>
+                  </View>
+                </View>
+              )}
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.exportOption, styles.shareOption]} 
+              onPress={handleShare}
+            >
+              <View style={styles.exportOptionContent}>
+                <Share2 size={24} color="white" />
+                <View style={styles.exportOptionInfo}>
+                  <Text style={styles.exportOptionTitle}>Partager</Text>
+                  <Text style={styles.exportOptionDesc}>Partager en texte</Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.exportModalActions}>
+            <TouchableOpacity 
+              style={[styles.exportActionButton, styles.closeExportButton]} 
+              onPress={() => setShowExportModal(false)}
+            >
+              <Text style={styles.exportActionButtonText}>Fermer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
+  function renderQRModal() {
+    return (
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={showQRModal}
+        onRequestClose={() => setShowQRModal(false)}
+      >
+        <View style={styles.qrModalOverlay}>
+          <View style={styles.qrModal}>
+            <View style={styles.qrModalHeader}>
+              <Text style={styles.qrModalTitle}>Code QR</Text>
+              <TouchableOpacity onPress={() => setShowQRModal(false)}>
+                <X size={24} color="#2c3e50" />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.qrContent}>
+              {member.qr_code ? (
+                <>
+                  <QRCode
+                    value={member.qr_code}
+                    size={200}
+                    color="#2c3e50"
+                    backgroundColor="white"
+                  />
+                  <Text style={styles.qrCodeText}>{member.qr_code}</Text>
+                </>
+              ) : (
+                <View style={styles.noQrContent}>
+                  <QrCode size={64} color="#95a5a6" />
+                  <Text style={styles.noQrText}>Aucun QR Code disponible</Text>
+                </View>
+              )}
+            </View>
+            
+            <View style={styles.qrActions}>
+              <TouchableOpacity 
+                style={[styles.qrActionButton, styles.closeQrButton]} 
+                onPress={() => setShowQRModal(false)}
+              >
+                <Text style={styles.qrActionButtonText}>Fermer</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
+  function renderDetailsModal() {
+    return (
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={showDetailsModal}
+        onRequestClose={() => setShowDetailsModal(false)}
+      >
+        <View style={styles.detailsModalContainer}>
+          <View style={styles.detailsModalHeader}>
+            <Text style={styles.detailsModalTitle}>Détails complets</Text>
+            <TouchableOpacity onPress={() => setShowDetailsModal(false)}>
+              <X size={24} color="#2c3e50" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView style={styles.detailsModalContent}>
+            {/* Contenu détaillé */}
+          </ScrollView>
+        </View>
+      </Modal>
+    );
+  }
+
+  function renderPaymentModal() {
+    return (
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showPaymentModal}
+        onRequestClose={() => setShowPaymentModal(false)}
+      >
+        <View style={styles.paymentModalOverlay}>
+          <View style={styles.paymentModal}>
+            <View style={styles.paymentModalHeader}>
+              <Text style={styles.paymentModalTitle}>Paiement de la carte</Text>
+              <TouchableOpacity onPress={() => setShowPaymentModal(false)}>
+                <X size={24} color="#2c3e50" />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.paymentModalContent}>
+              <Text style={styles.paymentNote}>
+                ⚠️ RÈGLE MÉTIER : Aucune carte ne peut être générée sans paiement de 5 $
+              </Text>
+              
+              {/* Contenu du modal de paiement */}
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
 }
 
 const styles = StyleSheet.create({
+  // Styles de base
   container: {
-    backgroundColor: 'white',
-    borderRadius: 18,
-    padding: 20,
     marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    elevation: 6,
-    borderWidth: 1,
-    borderColor: '#ecf0f1',
-    width: screenWidth - 32,
-    alignSelf: 'center',
+    marginHorizontal: 16,
   },
-  cardHeader: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  cardTypeTitle: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: '#2c3e50',
-    marginBottom: 4,
-    letterSpacing: 0.5,
-  },
-  cardSubtitle: {
-    fontSize: 12,
-    color: '#7f8c8d',
-    fontStyle: 'italic',
-    marginBottom: 8,
-  },
-  dossierBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(52, 152, 219, 0.1)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 15,
-    gap: 6,
-    borderWidth: 1,
-    borderColor: '#3498db',
-    marginTop: 4,
-  },
-  dossierBadgeText: {
-    fontSize: 11,
-    color: '#3498db',
-    fontWeight: '800',
-  },
-  cardPreview: {
-    width: '100%',
-    height: 260,
-    borderRadius: 14,
-    overflow: 'hidden',
-    position: 'relative',
-    marginBottom: 20,
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.35,
-    shadowRadius: 18,
-    elevation: 10,
-  },
-  cardOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    opacity: 0.4,
-  },
-  typeBadge: {
-    position: 'absolute',
-    top: 12,
-    left: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 18,
-    gap: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
-    elevation: 5,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.5)',
-  },
-  typeBadgeText: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: '#4b6cb7',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  churchNameContainer: {
-    position: 'absolute',
-    top: 12,
-    right: 100,
-  },
-  churchName: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: 'rgba(255,255,255,0.98)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-    textShadowColor: 'rgba(0,0,0,0.4)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-  },
-  cardTitlePreview: {
-    position: 'absolute',
-    top: 32,
-    left: 12,
-    fontSize: 18,
-    fontWeight: '900',
-    color: 'white',
-    textTransform: 'uppercase',
-    letterSpacing: 1.5,
-    textShadowColor: 'rgba(0,0,0,0.4)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-  },
-  memberInfoPreview: {
-    position: 'absolute',
-    top: 65,
-    left: 12,
-    right: 100,
-  },
-  memberNamePreview: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: 'white',
-    textShadowColor: 'rgba(0,0,0,0.4)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-    marginBottom: 3,
-  },
-  memberLastNamePreview: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: 'white',
-    textShadowColor: 'rgba(0,0,0,0.4)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-    marginBottom: 12,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 5,
-    gap: 6,
-  },
-  detailText: {
-    fontSize: 10.5,
-    color: 'rgba(255,255,255,0.95)',
-    flex: 1,
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 1,
-  },
-  photoContainerPreview: {
-    position: 'absolute',
-    top: 65,
-    right: 12,
-    width: 85,
-    height: 85,
-    borderRadius: 10,
-    borderWidth: 3,
-    borderColor: 'white',
-    overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  memberPhotoPreview: {
-    width: '100%',
-    height: '100%',
-  },
-  photoPlaceholderPreview: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  photoInitials: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: 'white',
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-  },
-  qrContainerPreview: {
-    position: 'absolute',
-    bottom: 45,
-    right: 12,
-    backgroundColor: 'white',
-    padding: 5,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
-    shadowRadius: 5,
-    elevation: 4,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-  techInfo: {
-    position: 'absolute',
-    bottom: 18,
-    left: 12,
-  },
-  memberId: {
-    fontSize: 9.5,
-    color: 'rgba(255,255,255,0.8)',
-    fontWeight: '800',
-    marginBottom: 3,
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 1,
-  },
-  validity: {
-    fontSize: 9.5,
-    color: 'rgba(255,255,255,0.8)',
-    fontWeight: '800',
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 1,
-  },
-  dossierContainer: {
-    position: 'absolute',
-    bottom: 10,
-    left: '50%',
-    transform: [{ translateX: -50 }],
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 15,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
-  dossierText: {
-    fontSize: 9,
-    color: 'white',
-    fontWeight: '800',
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 1,
-  },
-  signaturePreview: {
-    position: 'absolute',
-    bottom: 10,
-    right: 12,
-  },
-  signatureText: {
-    fontSize: 8,
-    color: 'rgba(255,255,255,0.6)',
-    fontStyle: 'italic',
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 1,
-  },
-  actionsContainer: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 15,
-  },
-  actionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 12,
-    gap: 8,
-    flex: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
-    shadowRadius: 5,
-    elevation: 4,
-  },
-  pdfButton: {
-    backgroundColor: '#e74c3c',
-  },
-  shareButton: {
-    backgroundColor: '#3498db',
-  },
-  printButton: {
-    backgroundColor: '#2c3e50',
-  },
-  actionButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  adminActions: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 10,
-    flexWrap: 'wrap',
-  },
-  adminButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
-    gap: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-    minWidth: 100,
-  },
-  qrButton: {
-    backgroundColor: '#9b59b6',
-  },
-  dossierButton: {
-    backgroundColor: '#27ae60',
-  },
-  editButton: {
-    backgroundColor: '#f39c12',
-  },
-  deleteButton: {
-    backgroundColor: '#e74c3c',
-  },
-  adminButtonText: {
-    color: 'white',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  hiddenQRCode: {
-    position: 'absolute',
-    left: -1000,
-    opacity: 0,
-  },
-  // Styles pour l'édition
-  editingCard: {
-    backgroundColor: 'white',
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 8,
-    borderWidth: 2,
-    borderColor: '#f39c12',
-  },
-  editHeader: {
+  
+  // En-tête
+  header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
-    paddingBottom: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#ecf0f1',
-  },
-  editTitle: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: '#2c3e50',
-  },
-  cancelButton: {
-    padding: 4,
-  },
-  editForm: {
-    maxHeight: 400,
-  },
-  photoEditContainer: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  editPhoto: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    borderWidth: 3,
-    borderColor: '#3498db',
-    marginBottom: 10,
-  },
-  editPhotoPlaceholder: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  churchInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  churchLogo: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+  },
+  churchName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#2c3e50',
+    flex: 1,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  headerAction: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  shareAction: { backgroundColor: '#3498db' },
+  exportAction: { backgroundColor: '#9b59b6' },
+  editAction: { backgroundColor: '#f39c12' },
+  
+  // Carte principale
+  card: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 20,
+    ...UI_CONSTANTS.SHADOW_MEDIUM,
+  },
+  cardProfessional: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  cardModern: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
+  },
+  
+  // Statut paiement
+  paymentStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  paymentDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  paymentText: {
+    fontSize: 14,
+    fontWeight: '600',
+    flex: 1,
+  },
+  payNowButton: {
+    backgroundColor: '#e74c3c',
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  payNowText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  
+  // En-tête membre
+  memberHeader: {
+    flexDirection: 'row',
+    marginBottom: 20,
+  },
+  photoContainer: {
+    marginRight: 16,
+    position: 'relative',
+  },
+  photo: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#f5f5f5',
+    borderWidth: 3,
+    borderColor: '#ecf0f1',
+  },
+  photoPlaceholder: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#ecf0f1',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
-    borderColor: '#ddd',
-    marginBottom: 10,
+    borderColor: '#dfe6e9',
   },
-  changePhotoButton: {
+  initials: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#7f8c8d',
+  },
+  memberInfo: {
+    flex: 1,
+  },
+  memberName: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    marginBottom: 8,
+  },
+  typeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  typeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  memberType: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    fontWeight: '600',
+  },
+  positionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e3f2fd',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    gap: 6,
+  },
+  restrictedPositionBadge: {
+    backgroundColor: '#ffebee',
+  },
+  positionText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  contactInfo: {
+    gap: 6,
+  },
+  contactItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  contactText: {
+    fontSize: 14,
+    color: '#7f8c8d',
+  },
+  
+  // Informations carte
+  cardInfoSection: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  cardInfoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  cardInfoTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2c3e50',
+  },
+  cardNumberContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#dfe6e9',
+  },
+  cardNumberLabel: {
+    fontSize: 14,
+    color: '#7f8c8d',
+    marginRight: 8,
+  },
+  cardNumber: {
+    fontSize: 16,
+    fontFamily: 'monospace',
+    color: '#2c3e50',
+    fontWeight: '600',
+    flex: 1,
+  },
+  cardActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  cardAction: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+  viewCardAction: {
     backgroundColor: '#3498db',
-    paddingHorizontal: 16,
+  },
+  viewInvoiceAction: {
+    backgroundColor: '#27ae60',
+  },
+  cardActionText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  
+  // Pas de carte
+  noCardSection: {
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    padding: 20,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  noCardIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#ecf0f1',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  noCardText: {
+    fontSize: 14,
+    color: '#95a5a6',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  generateCardButton: {
+    backgroundColor: '#3498db',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  generateCardText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  
+  // Détails
+  detailsSection: {
+    marginBottom: 16,
+  },
+  detailsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  detailItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
+    paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 20,
     gap: 6,
   },
-  changePhotoText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  editRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  editField: {
-    marginBottom: 15,
-  },
-  editLabel: {
+  detailText: {
     fontSize: 12,
     color: '#7f8c8d',
-    marginBottom: 6,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
-  editInput: {
-    borderWidth: 2,
-    borderColor: '#ecf0f1',
-    borderRadius: 10,
-    paddingHorizontal: 15,
-    paddingVertical: 12,
-    fontSize: 15,
+  departmentsRow: {
+    marginBottom: 12,
+  },
+  departmentsTitle: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  departmentsList: {
+    fontSize: 14,
     color: '#2c3e50',
-    backgroundColor: '#f8f9fa',
-    fontWeight: '700',
+    lineHeight: 20,
   },
-  editActions: {
-    marginTop: 20,
+  datesRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#ecf0f1',
   },
-  saveButton: {
+  dateItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  dateText: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    fontStyle: 'italic',
+  },
+  
+  // Actions
+  actionsSection: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  actionButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#27ae60',
-    paddingVertical: 15,
+    paddingVertical: 14,
+    borderRadius: 8,
+    gap: 8,
+  },
+  folderButton: {
+    backgroundColor: '#2980b9',
+  },
+  qrButton: {
+    backgroundColor: '#9b59b6',
+  },
+  deleteButton: {
+    backgroundColor: '#e74c3c',
+  },
+  actionButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  
+  // Signature
+  signature: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#ecf0f1',
+  },
+  signatureText: {
+    fontSize: 11,
+    color: '#f39c12',
+    fontStyle: 'italic',
+    fontWeight: '600',
+  },
+  
+  // Mode compact
+  compactContainer: {
+    backgroundColor: 'white',
     borderRadius: 12,
-    gap: 10,
-    shadowColor: '#27ae60',
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    elevation: 8,
+    padding: 12,
+    marginBottom: 8,
+    ...UI_CONSTANTS.SHADOW_SMALL,
+  },
+  compactContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  compactLeft: {
+    position: 'relative',
+    marginRight: 12,
+  },
+  compactStatusDot: {
+    position: 'absolute',
+    bottom: 2,
+    right: 2,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: 'white',
+  },
+  compactCenter: {
+    flex: 1,
+  },
+  compactName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 4,
+  },
+  compactMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  compactType: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  compactPosition: {
+    fontSize: 12,
+    color: '#3498db',
+    maxWidth: 100,
+  },
+  compactRight: {
+    marginLeft: 8,
+  },
+  compactPaymentBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  compactPaymentText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  
+  // Modals (simplifiés pour la concision)
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'white',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#ecf0f1',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+  },
+  modalContent: {
+    flex: 1,
+    padding: 20,
+  },
+  modalNote: {
+    backgroundColor: '#fff3cd',
+    color: '#856404',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 20,
+    fontSize: 14,
+  },
+  editSection: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 16,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 16,
+  },
+  inputGroup: {
+    flex: 1,
+    marginBottom: 16,
+  },
+  inputLabel: {
+    fontSize: 14,
+    color: '#2c3e50',
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#dfe6e9',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    color: '#2c3e50',
+    backgroundColor: '#f8f9fa',
+  },
+  typeOptions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  typeOption: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#dfe6e9',
+    alignItems: 'center',
+  },
+  typeOptionActive: {
+    backgroundColor: '#3498db',
+    borderColor: '#3498db',
+  },
+  typeOptionText: {
+    fontSize: 14,
+    color: '#7f8c8d',
+    fontWeight: '600',
+  },
+  typeOptionTextActive: {
+    color: 'white',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    padding: 20,
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#ecf0f1',
+  },
+  modalButton: {
+    flex: 1,
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  cancelButton: {
+    backgroundColor: '#f8f9fa',
+    borderWidth: 1,
+    borderColor: '#dfe6e9',
+  },
+  saveButton: {
+    backgroundColor: '#27ae60',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    color: '#7f8c8d',
+    fontWeight: '600',
   },
   saveButtonText: {
+    fontSize: 16,
+    color: 'white',
+    fontWeight: '600',
+  },
+  
+  // Modal export
+  exportModalContainer: {
+    flex: 1,
+    backgroundColor: 'white',
+  },
+  exportModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#ecf0f1',
+  },
+  exportModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+  },
+  exportOptions: {
+    flex: 1,
+    padding: 20,
+  },
+  exportOptionsTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  exportOptionsSubtitle: {
+    fontSize: 16,
+    color: '#7f8c8d',
+    marginBottom: 30,
+    textAlign: 'center',
+  },
+  exportOption: {
+    marginBottom: 16,
+    padding: 20,
+    borderRadius: 12,
+    ...UI_CONSTANTS.SHADOW_SMALL,
+  },
+  pdfOption: {
+    backgroundColor: '#e74c3c',
+  },
+  imageOption: {
+    backgroundColor: '#3498db',
+  },
+  shareOption: {
+    backgroundColor: '#27ae60',
+  },
+  exportOptionLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  exportOptionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  exportOptionInfo: {
+    flex: 1,
+  },
+  exportOptionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: 'white',
+    marginBottom: 4,
+  },
+  exportOptionDesc: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.9)',
+  },
+  exportOptionText: {
+    fontSize: 16,
+    color: 'white',
+    fontWeight: '600',
+  },
+  exportModalActions: {
+    padding: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#ecf0f1',
+  },
+  exportActionButton: {
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  closeExportButton: {
+    backgroundColor: '#95a5a6',
+  },
+  exportActionButtonText: {
     color: 'white',
     fontSize: 16,
-    fontWeight: '900',
+    fontWeight: '600',
   },
-}); 
+  
+  // Modal QR
+  qrModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  qrModal: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+  },
+  qrModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  qrModalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+  },
+  qrContent: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  qrCodeText: {
+    fontSize: 14,
+    fontFamily: 'monospace',
+    color: '#2c3e50',
+    marginTop: 16,
+    backgroundColor: '#f8f9fa',
+    padding: 12,
+    borderRadius: 8,
+    textAlign: 'center',
+    width: '100%',
+  },
+  noQrContent: {
+    alignItems: 'center',
+    padding: 40,
+  },
+  noQrText: {
+    fontSize: 16,
+    color: '#95a5a6',
+    textAlign: 'center',
+    marginTop: 16,
+  },
+  qrActions: {
+    width: '100%',
+  },
+  qrActionButton: {
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  closeQrButton: {
+    backgroundColor: '#3498db',
+  },
+  qrActionButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  
+  // Modal paiement
+  paymentModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  paymentModal: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingBottom: 40,
+    maxHeight: '90%',
+  },
+  paymentModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.1)',
+  },
+  paymentModalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+  },
+  paymentModalContent: {
+    padding: 20,
+  },
+  paymentNote: {
+    backgroundColor: '#ffeaa7',
+    color: '#856404',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 20,
+    fontSize: 14,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+});

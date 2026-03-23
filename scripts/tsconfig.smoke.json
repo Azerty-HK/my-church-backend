@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2020",
+    "outDir": "../build",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "node",
+    "allowJs": true,
+    "strict": false,
+    "noEmitOnError": false
+  },
+  "include": [
+    "../lib/database.ts",
+    "../lib/mysql.ts",
+    "../lib/postgresql.ts",
+    "../utils/constants.ts",
+    "../types/database.ts",
+    "../scripts/smoke_test.ts"
+  ]
+}

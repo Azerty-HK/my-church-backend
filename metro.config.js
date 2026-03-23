@@ -1,17 +1,41 @@
+/**
+ * metro.config.js
+ * Expo + TypeScript + Windows + CommonJS
+ */
+
 const { getDefaultConfig } = require('expo/metro-config');
+const path = require('path');
 
 const config = getDefaultConfig(__dirname);
 
-// Configuration pour les polyfills
+// ============================================
+// Résolution des modules et polyfills
+// ============================================
 config.resolver.alias = {
   ...config.resolver.alias,
-  'crypto': 'react-native-get-random-values',
+  crypto: 'react-native-get-random-values', // polyfill crypto
 };
 
-// Support pour les extensions supplémentaires
-config.resolver.sourceExts = [...config.resolver.sourceExts, 'cjs'];
+// Extensions supportées
+config.resolver.sourceExts = [
+  ...config.resolver.sourceExts,
+  'cjs',
+  'ts',
+  'tsx',
+  'jsx',
+];
 
-// Configuration pour les assets
-config.resolver.assetExts = [...config.resolver.assetExts, 'bin'];
+// Assets supplémentaires
+config.resolver.assetExts = [
+  ...config.resolver.assetExts,
+  'bin',
+];
 
+// Pour s'assurer que Metro surveille correctement le dossier du projet
+config.watchFolders = [
+  path.resolve(__dirname),
+];
+
+// ============================================
+// Export en CommonJS (important pour Windows + Metro)
 module.exports = config;

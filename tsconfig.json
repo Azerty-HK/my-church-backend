@@ -2,6 +2,13 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    "module": "NodeNext",                // Obligatoire pour ESM
+    "moduleResolution": "NodeNext",      // Pour résoudre correctement les imports relatifs
+    "target": "ES2020",                  // Pour Node 18+
+    "allowImportingTsExtensions": true,  // Permet import './file.ts'
+    "esModuleInterop": true,             // Pour les imports CommonJS
+    "resolveJsonModule": true,           // Si tu veux importer des JSON
+    "baseUrl": ".",                       // Pour utiliser les paths
     "paths": {
       "@/*": ["./*"]
     }
@@ -12,5 +19,6 @@
     ".expo/types/**/*.ts",
     "expo-env.d.ts",
     "nativewind-env.d.ts"
-  ]
+  ],
+  "exclude": ["node_modules"]
 }

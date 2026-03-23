@@ -79,7 +79,7 @@ export default function IndexScreen() {
 
   // Si auth en cours, ou redirection en cours, ou chargement de l'église
   if (authLoading || isRedirecting || (isAuthenticated && churchLoading)) {
-    return <SplashLoader onLoadingComplete={() => {}} />;
+    return <SplashLoader onLoadingComplete={() => { }} />;
   }
 
   /* -----------------------------
@@ -170,4 +170,3 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
 });
- 

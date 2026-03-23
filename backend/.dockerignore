@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log
+.git
+.expo
+.next
+build
+dist
+server_crash.log
+test_pg.js
+check_schema.js

@@ -150,7 +150,7 @@ export function ArchiveViewer({ visible, archive, onClose, theme = 'blue', curre
                     <View style={styles.statsGrid}>
                       <View style={[styles.statCard, { backgroundColor: colors.success + '20' }]}>
                         <TrendingUp size={24} color={colors.success} />
-                        <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Revenus</Text>
+                        <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Comptes Rendus</Text>
                         <Text style={[styles.statValue, { color: colors.success }]}>
                           {formatCurrency(archiveData.financial_summary.total_income || 0, currency)}
                         </Text>

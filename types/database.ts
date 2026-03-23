@@ -11,6 +11,13 @@ export interface Church {
   initial_amount: number;
   current_balance: number;
   bank_balance: number;
+  // Balances multi-devises
+  current_balance_fc: number;
+  current_balance_usd: number;
+  current_balance_euro: number;
+  bank_balance_fc: number;
+  bank_balance_usd: number;
+  bank_balance_euro: number;
   theme: 'blue' | 'white' | 'black';
   expense_limit?: number;
   archive_frequency?: 'monthly' | 'yearly';
@@ -44,6 +51,9 @@ export interface User {
   updated_at: string;
 }
 
+
+export type MemberType = 'Membre' | 'Personnel';
+
 export type MemberPosition = 
   | 'Pasteur' 
   | 'Ouvrier' 
@@ -76,6 +86,14 @@ export type Department =
 export type PaymentMethod = 'cash' | 'bank' | 'mpesa' | 'orange_money' | 'airtel_money' | 'afrimoney';
 
 export interface Member {
+  joining_date: any;
+  joining_date: string | number | Date;
+  status: string;
+  status: string;
+  payment_method: string | undefined;
+  card_number: any;
+  has_paid: any;
+  payment_date: string;
   id: string;
   church_id: string;
   first_name: string;
@@ -84,7 +102,7 @@ export interface Member {
   phone?: string;
   address?: string;
   photo_url?: string;
-  member_type: 'Membre' | 'Personnel';
+  member_type: MemberType;
   position?: MemberPosition;
   departments?: Department[];
   salary?: number;
@@ -105,6 +123,7 @@ export interface DailyReport {
   category: 'Offrandes' | 'Dîmes' | 'Dons' | 'Contributions' | 'Divers';
   recorded_by: string;
   payment_method: PaymentMethod;
+  currency: 'FC' | 'USD' | 'EURO'; // ✅ CHAMP AJOUTÉ
   date: string;
   bills_breakdown?: BillBreakdown[];
   total_calculated?: number;
@@ -131,6 +150,7 @@ export interface Expense {
   category?: string;
   recorded_by: string;
   payment_method: PaymentMethod;
+  currency: 'FC' | 'USD' | 'EURO'; // ✅ CHAMP AJOUTÉ
   requires_approval?: boolean;
   is_approved?: boolean;
   approved_by?: string;
@@ -194,6 +214,8 @@ export interface PublicLink {
 }
 
 export interface Archive {
+  period_type: string;
+  period_type: string;
   id: string;
   church_id: string;
   archive_type: 'monthly' | 'yearly';
@@ -385,7 +407,6 @@ export interface CreateMemberData {
   dossier_type?: 'member' | 'personnel';
 }
 
-// ✅ NOUVEAU: Interface pour créer un événement
 export interface CreateEventData {
   church_id: string;
   title: string;
@@ -399,7 +420,6 @@ export interface CreateEventData {
   created_by: string;
 }
 
-// ✅ NOUVEAU: Interface pour mettre à jour un événement
 export interface UpdateEventData {
   title?: string;
   description?: string;
@@ -412,7 +432,6 @@ export interface UpdateEventData {
   is_active?: boolean;
 }
 
-// ✅ NOUVEAU: Interface pour les statistiques d'événements avancées
 export interface AdvancedEventStats {
   totalEvents: number;
   upcomingEvents: number;
@@ -449,7 +468,6 @@ export interface ReportExportData {
   generatedAt: string;
 }
 
-// ✅ NOUVEAU: Interface pour les opérations de dossier
 export interface DossierOperations {
   createDossier: (memberId: string, dossierType: 'member' | 'personnel') => Promise<MemberDossier>;
   addDocument: (dossierId: string, document: Omit<DossierDocument, 'id' | 'created_at' | 'updated_at'>) => Promise<DossierDocument>;
@@ -458,7 +476,6 @@ export interface DossierOperations {
   exportDossier: (dossierId: string, format: 'pdf' | 'zip') => Promise<string>;
 }
 
-// ✅ NOUVEAU: Interface pour les métriques de dossier
 export interface DossierMetrics {
   totalDossiers: number;
   dossiersByType: Record<string, number>;
@@ -470,7 +487,6 @@ export interface DossierMetrics {
   recentActivity: DossierTransaction[];
 }
 
-// ✅ NOUVEAU: Interface pour les filtres d'événements
 export interface EventFilters {
   event_type?: EventType | 'all';
   date_range?: 'today' | 'tomorrow' | 'this_week' | 'next_week' | 'this_month' | 'all';
@@ -479,7 +495,6 @@ export interface EventFilters {
   is_active?: boolean;
 }
 
-// ✅ NOUVEAU: Interface pour les résultats de recherche d'événements
 export interface EventSearchResult {
   events: Event[];
   total: number;
@@ -488,7 +503,6 @@ export interface EventSearchResult {
   hasMore: boolean;
 }
 
-// ✅ NOUVEAU: Interface pour les notifications d'événements
 export interface EventNotification {
   event_id: string;
   event_title: string;
@@ -500,7 +514,6 @@ export interface EventNotification {
   send_at: string;
 }
 
-// ✅ NOUVEAU: Interface pour l'export d'événements
 export interface EventExportData {
   events: Event[];
   total_events: number;
@@ -518,7 +531,6 @@ export interface EventExportData {
 
 // ==================== CONSTANTES ET UTILITAIRES ====================
 
-// ✅ NOUVEAU: Couleurs par type d'événement
 export const EVENT_TYPE_COLORS: Record<EventType, string> = {
   'Culte': '#3498db',
   'Réunion': '#f39c12',
@@ -527,7 +539,6 @@ export const EVENT_TYPE_COLORS: Record<EventType, string> = {
   'Autre': '#7f8c8d'
 };
 
-// ✅ NOUVEAU: Icônes par type d'événement
 export const EVENT_TYPE_ICONS: Record<EventType, string> = {
   'Culte': 'church',
   'Réunion': 'users',
@@ -536,7 +547,6 @@ export const EVENT_TYPE_ICONS: Record<EventType, string> = {
   'Autre': 'calendar'
 };
 
-// ✅ NOUVEAU: Options de rappel prédéfinies (en minutes)
 export const REMINDER_OPTIONS = [
   { value: 15, label: '15 minutes avant' },
   { value: 30, label: '30 minutes avant' },
@@ -547,24 +557,19 @@ export const REMINDER_OPTIONS = [
   { value: 10080, label: '1 semaine avant' }
 ];
 
-// ✅ NOUVEAU: Fonction utilitaire pour formater les dates d'événements
 export function formatEventDate(startDate: string, endDate?: string): string {
   const start = new Date(startDate);
   const end = endDate ? new Date(endDate) : null;
   
   if (end && start.toDateString() === end.toDateString()) {
-    // Même jour
     return `${start.toLocaleDateString('fr-FR')} • ${start.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
   } else if (end) {
-    // Plage de dates
     return `${start.toLocaleDateString('fr-FR')} → ${end.toLocaleDateString('fr-FR')}`;
   } else {
-    // Date unique
     return `${start.toLocaleDateString('fr-FR')} • ${start.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
   }
 }
 
-// ✅ NOUVEAU: Fonction pour calculer le décompte
 export function getTimeRemaining(startDate: string): {
   text: string;
   color: string;

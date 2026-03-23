@@ -1,6 +1,6 @@
 import 'react-native-get-random-values';
-import { DatabaseService } from './database';
-import type { Church, PaymentTransaction } from '../types/database';
+import { DatabaseService } from './database.ts';
+import type { Church, PaymentTransaction } from '../types/database.ts';
 
 export interface SubscriptionPlan {
   type: 'trial' | 'monthly' | 'yearly';

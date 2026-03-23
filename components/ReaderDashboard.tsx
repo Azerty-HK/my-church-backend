@@ -126,7 +126,7 @@ export function ReaderDashboard({ church, onRefresh }: ReaderDashboardProps) {
         strokeWidth: 3,
       },
     ],
-    legend: ['Revenus (k)', 'Dépenses (k)'],
+    legend: ['Compte Rendus (k)', 'Dépenses (k)'],
   };
 
   return (
@@ -164,7 +164,7 @@ export function ReaderDashboard({ church, onRefresh }: ReaderDashboardProps) {
           <View style={[styles.statCard, { backgroundColor: colors.success + '20' }]}>
             <TrendingUp size={24} color={colors.success} />
             <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
-              Revenus du mois
+              Compte Rendus du mois
             </Text>
             <Text style={[styles.statValue, { color: colors.success }]}>
               {formatCurrency(totalRevenue, church.currency)}
@@ -205,7 +205,7 @@ export function ReaderDashboard({ church, onRefresh }: ReaderDashboardProps) {
         <View style={[styles.section, { backgroundColor: colors.surface }]}>
           <View style={styles.sectionHeader}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>
-              📊 Revenus / Dépenses (7 derniers jours)
+              📊 Comptes rendus / Dépenses (7 derniers jours)
             </Text>
             <View style={[styles.readOnlyPill, { backgroundColor: colors.info + '20' }]}>
               <Text style={[styles.readOnlyPillText, { color: colors.info }]}>
@@ -253,7 +253,7 @@ export function ReaderDashboard({ church, onRefresh }: ReaderDashboardProps) {
               onPress={() => router.push('/finance')}
             >
               <Eye size={24} color="white" />
-              <Text style={styles.actionText}>Consulter revenus</Text>
+              <Text style={styles.actionText}>Consulter Comptes Rendus</Text>
             </TouchableOpacity>
 
             <TouchableOpacity

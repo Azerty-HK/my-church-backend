@@ -1,46 +1,9 @@
 import 'react-native-get-random-values';
+import { v4 as uuidv4 } from 'uuid';
+import { PostgreSQLService } from '../lib/postgresql';
+import type { PaymentMethod } from '../types/database';
 
-// API Keys réservées pour My Church - Created by Henock Aduma
-export const PAYMENT_API_KEYS = {
-  // Mobile Money APIs
-  MPESA: {
-    apiKey: 'MPESA_MC_2024_HENOCK_ADUMA_PROD_KEY',
-    secretKey: 'MPESA_MC_SECRET_2024_HENOCK_ADUMA',
-    shortCode: '174379',
-    passKey: 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919',
-    endpoint: 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest'
-  },
-  
-  ORANGE_MONEY: {
-    apiKey: 'ORANGE_MC_2024_HENOCK_ADUMA_PROD_KEY',
-    secretKey: 'ORANGE_MC_SECRET_2024_HENOCK_ADUMA',
-    merchantCode: 'MC_ORANGE_2024',
-    endpoint: 'https://api.orange.com/orange-money-webpay/dev/v1/webpayment'
-  },
-  
-  AIRTEL_MONEY: {
-    apiKey: 'AIRTEL_MC_2024_HENOCK_ADUMA_PROD_KEY',
-    secretKey: 'AIRTEL_MC_SECRET_2024_HENOCK_ADUMA',
-    merchantId: 'MC_AIRTEL_2024',
-    endpoint: 'https://openapiuat.airtel.africa/merchant/v1/payments/'
-  },
-  
-  AFRIMONEY: {
-    apiKey: 'AFRI_MC_2024_HENOCK_ADUMA_PROD_KEY',
-    secretKey: 'AFRI_MC_SECRET_2024_HENOCK_ADUMA',
-    merchantCode: 'MC_AFRI_2024',
-    endpoint: 'https://api.afrimoney.com/v1/payments'
-  },
-  
-  // Banking APIs
-  BANK_TRANSFER: {
-    apiKey: 'BANK_MC_2024_HENOCK_ADUMA_PROD_KEY',
-    secretKey: 'BANK_MC_SECRET_2024_HENOCK_ADUMA',
-    bankCode: 'MC_BANK_2024',
-    endpoint: 'https://api.banking.cd/v1/transfers'
-  }
-};
-
+// Types pour le service de paiement
 export interface PaymentRequest {
   amount: number;
   currency: string;
@@ -48,163 +11,496 @@ export interface PaymentRequest {
   paymentMethod: string;
   reference: string;
   description: string;
+  cardDetails?: {
+    cardNumber: string;
+    cardHolderName: string;
+    expiryMonth: string;
+    expiryYear: string;
+    cvv: string;
+    cardType: string;
+  };
 }
 
 export interface PaymentResponse {
   success: boolean;
   transactionId: string;
   message: string;
-  reference: string;
   amount: number;
-  fees?: number;
+  currency: string;
+  reference: string;
+  timestamp: string;
 }
+
+export interface BankTransferInfo {
+  bankName: string;
+  accountNumber: string;
+  accountName: string;
+  swiftCode: string;
+  iban: string;
+  currency: string;
+}
+
+export interface PaymentMethodInfo {
+  name: string;
+  fees: string;
+  processingTime: string;
+  description: string;
+}
+
+// Codes de sécurité et clés de cryptage
+export const PAYMENT_SECURITY_CODES = {
+  VALIDATION_CODE: 'MC2024HA', // Code de validation standard
+  SECURITY_TOKEN: 'TOKEN_MC_HA_2024', // Token de sécurité
+  API_KEY_PREFIX: 'API_',
+  ENCRYPTION_KEY: 'MC_ENCRYPT_2024_HENOCK_ADUMA',
+};
+
+export const PAYMENT_ENCRYPTION_KEYS = {
+  AES_256: 'AES-256-GCM-MC-2024-HA',
+  RSA_PUBLIC: 'MC_RSA_PUB_2024',
+  RSA_PRIVATE: 'MC_RSA_PRIV_2024',
+};
 
 export class PaymentService {
-  static async processPayment(request: PaymentRequest): Promise<PaymentResponse> {
+  // Informations sur les banques pour virement
+  private static readonly BANK_INFO = {
+    USD: {
+      bankName: 'Standard Chartered Bank RDC',
+      accountNumber: '123456789012',
+      accountName: 'MY CHURCH MINISTRY LTD',
+      swiftCode: 'SCBLRDCK',
+      iban: 'CD1234567890123456789012',
+      currency: 'USD',
+    },
+    FC: {
+      bankName: 'Rawbank RDC',
+      accountNumber: '987654321098',
+      accountName: 'MY CHURCH MINISTRY CONGOLAISE',
+      swiftCode: 'RAWBCDKI',
+      iban: 'CD9876543210987654321098',
+      currency: 'FC',
+    },
+    EUR: {
+      bankName: 'Equity Bank Congo',
+      accountNumber: '543210987654',
+      accountName: 'MY CHURCH EUROPE SARL',
+      swiftCode: 'EQTYCDCK',
+      iban: 'CD5432109876543210987654',
+      currency: 'EUR',
+    },
+  };
+
+  // Informations sur les méthodes de paiement
+  private static readonly METHOD_INFO: Record<string, PaymentMethodInfo> = {
+    mobile: {
+      name: 'Mobile Money',
+      fees: '1% (max 500 FC)',
+      processingTime: 'Immédiat',
+      description: 'Paiement via M-Pesa, Airtel Money, Orange Money',
+    },
+    visa: {
+      name: 'Carte VISA',
+      fees: '2.5%',
+      processingTime: '2-3 jours',
+      description: 'Carte de crédit/débit VISA',
+    },
+    mastercard: {
+      name: 'Carte MasterCard',
+      fees: '2.5%',
+      processingTime: '2-3 jours',
+      description: 'Carte de crédit/débit MasterCard',
+    },
+    google_pay: {
+      name: 'Google Pay',
+      fees: '1.5%',
+      processingTime: 'Immédiat',
+      description: 'Paiement via Google Pay',
+    },
+    transfer: {
+      name: 'Virement Bancaire',
+      fees: '0.5%',
+      processingTime: '3-5 jours',
+      description: 'Virement bancaire local ou international',
+    },
+  };
+
+  // Validation des cartes
+  static isValidVisaCard(cardNumber: string): boolean {
+    const cleaned = cardNumber.replace(/\s/g, '');
+    return /^4[0-9]{12}(?:[0-9]{3})?$/.test(cleaned);
+  }
+
+  static isValidMasterCard(cardNumber: string): boolean {
+    const cleaned = cardNumber.replace(/\s/g, '');
+    return /^5[1-5][0-9]{14}$/.test(cleaned);
+  }
+
+  // Générer une référence de virement
+  static generateBankTransferReference(): string {
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `MC_REF_${timestamp}_${random}`;
+  }
+
+  // Obtenir les informations bancaires
+  static getBankTransferInfo(currency: 'USD' | 'FC' | 'EUR' = 'USD'): BankTransferInfo {
+    return this.BANK_INFO[currency];
+  }
+
+  // Obtenir les informations sur la méthode de paiement
+  static getPaymentMethodInfo(method: string): PaymentMethodInfo {
+    return this.METHOD_INFO[method] || {
+      name: 'Méthode inconnue',
+      fees: 'N/A',
+      processingTime: 'N/A',
+      description: 'Méthode non reconnue',
+    };
+  }
+
+  // Valider une méthode de paiement
+  static async validatePaymentMethod(
+    method: string,
+    phoneNumber?: string,
+    cardDetails?: any
+  ): Promise<{ valid: boolean; message: string }> {
     try {
-      console.log('💳 Traitement paiement My Church:', request);
-      
-      // Validation des données
-      if (request.amount <= 0) {
-        throw new Error('Montant invalide');
+      switch (method) {
+        case 'mobile':
+          if (!phoneNumber || phoneNumber.length < 9) {
+            return {
+              valid: false,
+              message: 'Numéro de téléphone invalide',
+            };
+          }
+          break;
+
+        case 'visa':
+        case 'mastercard':
+          if (!cardDetails) {
+            return {
+              valid: false,
+              message: 'Détails de carte manquants',
+            };
+          }
+
+          const expiryDate = new Date(
+            parseInt(`20${cardDetails.expiryYear}`),
+            parseInt(cardDetails.expiryMonth) - 1
+          );
+
+          if (expiryDate < new Date()) {
+            return {
+              valid: false,
+              message: 'Carte expirée',
+            };
+          }
+          break;
+
+        case 'google_pay':
+          // Validation basique pour Google Pay
+          return {
+            valid: true,
+            message: 'Google Pay validé',
+          };
+
+        case 'transfer':
+          // Toujours valide pour virement
+          return {
+            valid: true,
+            message: 'Virement validé',
+          };
+
+        default:
+          return {
+            valid: false,
+            message: 'Méthode de paiement non supportée',
+          };
       }
-      
-      if (!request.paymentMethod) {
-        throw new Error('Méthode de paiement requise');
-      }
 
-      // Sélectionner l'API appropriée
-      const apiConfig = this.getPaymentApiConfig(request.paymentMethod);
-      
-      // Simulation du processus de paiement
-      const response = await this.simulatePaymentProcess(request, apiConfig);
-      
-      console.log('✅ Paiement My Church traité avec succès:', response);
-      return response;
-    } catch (error: any) {
-      console.error('❌ Erreur paiement My Church:', error);
-      throw error;
-    }
-  }
-
-  private static getPaymentApiConfig(paymentMethod: string): any {
-    switch (paymentMethod.toLowerCase()) {
-      case 'mpesa':
-        return PAYMENT_API_KEYS.MPESA;
-      case 'orange_money':
-        return PAYMENT_API_KEYS.ORANGE_MONEY;
-      case 'airtel_money':
-        return PAYMENT_API_KEYS.AIRTEL_MONEY;
-      case 'afrimoney':
-        return PAYMENT_API_KEYS.AFRIMONEY;
-      case 'bank':
-        return PAYMENT_API_KEYS.BANK_TRANSFER;
-      default:
-        throw new Error('Méthode de paiement non supportée');
-    }
-  }
-
-  private static async simulatePaymentProcess(
-    request: PaymentRequest, 
-    apiConfig: any
-  ): Promise<PaymentResponse> {
-    return new Promise(async (resolve, reject) => {
-      try {
-        console.log('🔄 Simulation paiement avec API:', apiConfig.apiKey);
-        
-        // Étapes de simulation réaliste
-        const steps = [
-          { message: 'Connexion à l\'API de paiement...', delay: 800 },
-          { message: 'Validation des informations...', delay: 1200 },
-          { message: 'Traitement sécurisé...', delay: 1500 },
-          { message: 'Confirmation du paiement...', delay: 1000 },
-          { message: 'Finalisation...', delay: 600 },
-        ];
-
-        for (const step of steps) {
-          console.log('📱', step.message);
-          await new Promise(resolve => setTimeout(resolve, step.delay));
-        }
-        
-        // Générer un ID de transaction réaliste
-        const transactionId = `${request.paymentMethod.toUpperCase()}_${Date.now()}_MC_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-        
-        // Calculer les frais (simulation)
-        const fees = Math.round(request.amount * 0.02); // 2% de frais
-        
-        const response: PaymentResponse = {
-          success: true,
-          transactionId,
-          message: `Paiement de ${request.amount} ${request.currency} effectué avec succès via ${request.paymentMethod}`,
-          reference: request.reference,
-          amount: request.amount,
-          fees,
-        };
-        
-        console.log('✅ Paiement simulé avec succès - My Church by Henock Aduma');
-        resolve(response);
-      } catch (error) {
-        console.error('💥 Erreur simulation paiement:', error);
-        reject(new Error('Échec du paiement simulé'));
-      }
-    });
-  }
-
-  static async validatePaymentMethod(method: string, phoneNumber?: string): Promise<boolean> {
-    try {
-      const mobilePayments = ['mpesa', 'orange_money', 'airtel_money', 'afrimoney'];
-      
-      if (mobilePayments.includes(method.toLowerCase())) {
-        if (!phoneNumber || phoneNumber.length < 8) {
-          throw new Error('Numéro de téléphone requis pour le paiement mobile');
-        }
-        
-        // Validation du format de numéro selon l'opérateur
-        if (method === 'mpesa' && !phoneNumber.startsWith('+254')) {
-          console.log('⚠️ Numéro M-Pesa non standard, mais accepté pour la démo');
-        }
-      }
-      
-      return true;
+      return {
+        valid: true,
+        message: 'Méthode validée avec succès',
+      };
     } catch (error) {
-      console.error('❌ Validation méthode de paiement:', error);
-      return false;
+      console.error('Erreur validation méthode:', error);
+      return {
+        valid: false,
+        message: 'Erreur de validation',
+      };
     }
   }
 
-  static getPaymentMethodInfo(method: string): { name: string; fees: string; processingTime: string } {
-    const methodsInfo: Record<string, any> = {
-      mpesa: {
-        name: 'M-Pesa',
-        fees: '2% + 0.50 USD',
-        processingTime: 'Instantané'
-      },
-      orange_money: {
-        name: 'Orange Money',
-        fees: '1.5% + 100 FC',
-        processingTime: 'Instantané'
-      },
-      airtel_money: {
-        name: 'Airtel Money',
-        fees: '2% + 0.25 USD',
-        processingTime: 'Instantané'
-      },
-      afrimoney: {
-        name: 'Afrimoney',
-        fees: '1.8% + 50 FC',
-        processingTime: 'Instantané'
-      },
-      bank: {
-        name: 'Virement bancaire',
-        fees: '5 USD fixe',
-        processingTime: '1-3 jours ouvrables'
-      }
-    };
+  // Traiter un paiement (intégration avec PostgreSQL)
+  static async processPayment(
+    paymentRequest: PaymentRequest,
+    churchId?: string,
+    subscriptionType?: 'monthly' | 'yearly'
+  ): Promise<PaymentResponse> {
+    try {
+      console.log('💰 Traitement paiement:', paymentRequest);
 
-    return methodsInfo[method.toLowerCase()] || {
-      name: method,
-      fees: 'Variable',
-      processingTime: 'Variable'
+      // Générer un ID de transaction
+      const transactionId = `TXN_${Date.now()}_${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
+
+      // Simuler le traitement
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      // Vérifications de sécurité
+      if (!this.validatePaymentAmount(paymentRequest.amount)) {
+        throw new Error('Montant de paiement invalide');
+      }
+
+      // Si c'est un abonnement, traiter avec PostgreSQL
+      if (churchId && subscriptionType) {
+        console.log('🔐 Traitement abonnement pour église:', churchId);
+
+        try {
+          // Traiter le paiement d'abonnement via PostgreSQL
+          const result = await PostgreSQLService.processSubscriptionPayment(
+            churchId,
+            subscriptionType,
+            transactionId,
+            new Date().toISOString()
+          );
+
+          if (!result.success) {
+            throw new Error(`Échec traitement abonnement: ${result.message}`);
+          }
+
+          console.log('✅ Abonnement traité avec succès:', result);
+        } catch (error) {
+          console.error('❌ Erreur traitement abonnement PostgreSQL:', error);
+          throw error;
+        }
+      }
+
+      // Si c'est un paiement simple, créer une transaction
+      if (churchId && !subscriptionType) {
+        try {
+          await PostgreSQLService.createPaymentTransaction({
+            church_id: churchId,
+            amount: paymentRequest.amount,
+            payment_method: paymentRequest.paymentMethod as PaymentMethod,
+            transaction_id: transactionId,
+            status: 'paid',
+            subscription_type: 'donation',
+          });
+        } catch (error) {
+          console.error('❌ Erreur création transaction:', error);
+          // Ne pas bloquer le paiement pour cette erreur
+        }
+      }
+
+      return {
+        success: true,
+        transactionId,
+        message: 'Paiement traité avec succès',
+        amount: paymentRequest.amount,
+        currency: paymentRequest.currency,
+        reference: paymentRequest.reference,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      console.error('❌ Erreur processPayment:', error);
+      return {
+        success: false,
+        transactionId: '',
+        message: error.message || 'Le paiement a échoué',
+        amount: paymentRequest.amount,
+        currency: paymentRequest.currency,
+        reference: paymentRequest.reference,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  // Valider le montant du paiement
+  private static validatePaymentAmount(amount: number): boolean {
+    return amount > 0 && amount <= 1000000; // Limite de 1,000,000
+  }
+
+  // Vérifier le statut d'une transaction
+  static async checkTransactionStatus(transactionId: string): Promise<{
+    status: 'pending' | 'paid' | 'failed' | 'refunded';
+    message: string;
+    details?: any;
+  }> {
+    try {
+      // Simulation - en production, interroger la passerelle de paiement
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Par défaut, on considère que les paiements sont réussis
+      return {
+        status: 'paid',
+        message: 'Transaction confirmée',
+        details: {
+          transactionId,
+          confirmedAt: new Date().toISOString(),
+        },
+      };
+    } catch (error) {
+      console.error('Erreur vérification transaction:', error);
+      return {
+        status: 'failed',
+        message: 'Impossible de vérifier le statut',
+      };
+    }
+  }
+
+  // Rembourser un paiement
+  static async refundPayment(
+    transactionId: string,
+    amount?: number
+  ): Promise<{ success: boolean; message: string; refundId?: string }> {
+    try {
+      console.log('🔄 Tentative de remboursement:', transactionId);
+
+      // Simulation de remboursement
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const refundId = `REF_${Date.now()}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+
+      return {
+        success: true,
+        message: 'Remboursement initié avec succès',
+        refundId,
+      };
+    } catch (error: any) {
+      console.error('❌ Erreur remboursement:', error);
+      return {
+        success: false,
+        message: error.message || 'Le remboursement a échoué',
+      };
+    }
+  }
+
+  // Générer un reçu
+  static generateReceipt(transaction: {
+    id: string;
+    amount: number;
+    currency: string;
+    method: string;
+    date: string;
+    description: string;
+  }): string {
+    return `
+      🧾 RECU DE PAIEMENT MY CHURCH
+      ================================
+      📄 Référence: ${transaction.id}
+      💰 Montant: ${transaction.amount.toLocaleString()} ${transaction.currency}
+      💳 Méthode: ${transaction.method}
+      📅 Date: ${new Date(transaction.date).toLocaleDateString('fr-FR')}
+      📝 Description: ${transaction.description}
+      ================================
+      🔐 Transaction sécurisée
+      🤝 Merci pour votre contribution!
+      ================================
+      My Church - Created by Henock Aduma
+    `;
+  }
+
+  // Obtenir l'historique des paiements d'une église
+  static async getChurchPaymentHistory(
+    churchId: string,
+    startDate?: string,
+    endDate?: string
+  ): Promise<any[]> {
+    try {
+      return await PostgreSQLService.getPaymentTransactions(churchId);
+    } catch (error) {
+      console.error('❌ Erreur récupération historique:', error);
+      return [];
+    }
+  }
+
+  // Vérifier les frais pour une méthode de paiement
+  static calculateFees(
+    amount: number,
+    method: string,
+    currency: string = 'USD'
+  ): {
+    amount: number;
+    fees: number;
+    total: number;
+    feePercentage: string;
+  } {
+    const methodInfo = this.METHOD_INFO[method];
+    let feePercentage = 0;
+
+    switch (method) {
+      case 'mobile':
+        feePercentage = 0.01; // 1%
+        break;
+      case 'visa':
+      case 'mastercard':
+        feePercentage = 0.025; // 2.5%
+        break;
+      case 'google_pay':
+        feePercentage = 0.015; // 1.5%
+        break;
+      case 'transfer':
+        feePercentage = 0.005; // 0.5%
+        break;
+      default:
+        feePercentage = 0.02; // 2% par défaut
+    }
+
+    let fees = amount * feePercentage;
+
+    // Limiter les frais pour Mobile Money
+    if (method === 'mobile' && currency === 'FC' && fees > 500) {
+      fees = 500;
+    }
+
+    const total = amount + fees;
+
+    return {
+      amount,
+      fees: Math.round(fees * 100) / 100,
+      total: Math.round(total * 100) / 100,
+      feePercentage: `${(feePercentage * 100).toFixed(1)}%`,
     };
+  }
+
+  // Encrypter les données sensibles (simulation)
+  static encryptSensitiveData(data: string): string {
+    // En production, utiliser une vraie encryption
+    const encrypted = btoa(encodeURIComponent(data + PAYMENT_SECURITY_CODES.ENCRYPTION_KEY));
+    return `ENC_${encrypted}`;
+  }
+
+  // Décrypter les données sensibles (simulation)
+  static decryptSensitiveData(encryptedData: string): string {
+    try {
+      if (!encryptedData.startsWith('ENC_')) {
+        return encryptedData;
+      }
+      const data = encryptedData.substring(4);
+      const decrypted = decodeURIComponent(atob(data));
+      return decrypted.replace(PAYMENT_SECURITY_CODES.ENCRYPTION_KEY, '');
+    } catch (error) {
+      console.error('❌ Erreur décryptage:', error);
+      return '';
+    }
+  }
+
+  // Vérifier la validité du code de sécurité
+  static validateSecurityCode(code: string): boolean {
+    return code === PAYMENT_SECURITY_CODES.VALIDATION_CODE;
+  }
+
+  // Générer un token d'API pour le paiement
+  static generateApiToken(method: string): string {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 10);
+    return `${PAYMENT_SECURITY_CODES.API_KEY_PREFIX}${method.toUpperCase()}_${timestamp}_${random}`;
   }
 }
+
+// Export des services
+export const PaymentServices = {
+  PaymentService,
+};
+
+console.log('💰 Service de paiement My Church initialisé - Intégration PostgreSQL active');
+console.log('🔐 Codes sécurité:', Object.keys(PAYMENT_SECURITY_CODES).length, 'codes configurés');

@@ -1,10 +1,10 @@
 import * as Updates from 'expo-updates';
-import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Alert, Platform } from 'react-native';
+import { NotificationService } from './NotificationService';
 
 export interface AppVersion {
-  version: string;
+  version: string;s
   versionCode: number;
   releaseNotes: string[];
   isRequired: boolean;
@@ -146,14 +146,12 @@ export class UpdateService {
     }
 
     try {
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: '🆕 Mise à jour My Church disponible',
-          body: `Version ${updateInfo.version} est maintenant disponible avec de nouvelles fonctionnalités !`,
-          data: { updateInfo },
-        },
-        trigger: { seconds: 60 }, // Notification dans 1 minute
-      });
+      await NotificationService.scheduleLocalNotification(
+        '🆕 Mise à jour My Church disponible',
+        `Version ${updateInfo.version} est maintenant disponible avec de nouvelles fonctionnalités !`,
+        { updateInfo },
+        60
+      );
     } catch (error) {
       console.error('❌ Erreur notification mise à jour:', error);
     }
@@ -182,21 +180,7 @@ export class UpdateService {
         return;
       }
 
-      // Configurer les notifications
-      await Notifications.setNotificationHandler({
-        handleNotification: async () => ({
-          shouldShowAlert: true,
-          shouldPlaySound: true,
-          shouldSetBadge: false,
-        }),
-      });
-
-      // Demander les permissions de notification
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status !== 'granted') {
-        console.log('⚠️ Permissions de notification refusées');
-      }
-
+      // Permissions handled by NotificationService now
       console.log('✅ Service de mise à jour initialisé');
     } catch (error) {
       console.error('❌ Erreur initialisation service de mise à jour:', error);

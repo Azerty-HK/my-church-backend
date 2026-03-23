@@ -1,6 +1,6 @@
 import 'react-native-get-random-values';
+import * as FileSystem from 'expo-file-system/legacy';
 import { v4 as uuidv4 } from 'uuid';
-import * as FileSystem from 'expo-file-system';
 
 export interface UploadResult {
   success: boolean;
@@ -9,10 +9,10 @@ export interface UploadResult {
 }
 
 export class StorageService {
-  // Répertoire de stockage local pour les images
+  // Répertoire de stockage local des images
   private static IMAGES_DIR = `${FileSystem.documentDirectory}images/`;
 
-  // Initialiser le répertoire de stockage
+  // Création du répertoire si inexistant
   static async initStorage() {
     try {
       const dirInfo = await FileSystem.getInfoAsync(this.IMAGES_DIR);
@@ -25,40 +25,38 @@ export class StorageService {
     }
   }
 
+  // Upload local d'une image
   static async uploadImage(
     uri: string,
     path: 'logos' | 'members',
     filename?: string
   ): Promise<UploadResult> {
     try {
-      console.log('📤 Upload image réel vers stockage local...');
+      console.log('📤 Upload image vers stockage local...');
       console.log('📍 URI source:', uri);
-      console.log('📁 Dossier:', path);
 
-      // Initialiser le stockage
       await this.initStorage();
 
-      // Vérifier que le fichier source existe
+      // Vérifier l'existence du fichier source avec l'API legacy
       const fileInfo = await FileSystem.getInfoAsync(uri);
       if (!fileInfo.exists) {
-        throw new Error('Le fichier source n\'existe pas');
+        throw new Error("Le fichier source n'existe pas");
       }
 
       console.log('📊 Taille du fichier:', fileInfo.size, 'bytes');
 
-      // Générer un nom de fichier unique
+      // Générer un nom unique
       const extension = uri.split('.').pop() || 'jpg';
       const finalFilename = filename || `${path}_${uuidv4()}.${extension}`;
       const destinationUri = `${this.IMAGES_DIR}${finalFilename}`;
 
-      // Copier le fichier vers le stockage permanent
+      // Copier le fichier vers le stockage local
       await FileSystem.copyAsync({
         from: uri,
         to: destinationUri
       });
 
-      console.log('✅ Image sauvegardée avec succès');
-      console.log('💾 URI locale:', destinationUri);
+      console.log('✅ Image sauvegardée avec succès dans :', destinationUri);
 
       return {
         success: true,
@@ -68,21 +66,22 @@ export class StorageService {
       console.error('❌ Erreur upload image:', error);
       return {
         success: false,
-        error: error.message || 'Erreur lors de l\'upload'
+        error: error.message || "Erreur lors de l'upload"
       };
     }
   }
 
+  // Suppression d'une image locale
   static async deleteImage(url: string): Promise<boolean> {
     try {
       console.log('🗑️ Suppression image:', url);
 
-      // Vérifier si c'est une image locale
+      // Vérifier si c'est une image interne
       if (url.startsWith(this.IMAGES_DIR)) {
         const fileInfo = await FileSystem.getInfoAsync(url);
         if (fileInfo.exists) {
           await FileSystem.deleteAsync(url);
-          console.log('✅ Image locale supprimée avec succès');
+          console.log('✅ Image supprimée');
         }
       }
 
@@ -93,42 +92,65 @@ export class StorageService {
     }
   }
 
+  // Récupérer l'URL complète
   static getImageUrl(path: string): string {
-    // Si c'est déjà une URL complète (http, https, ou file)
-    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('file://')) {
+    if (
+      path.startsWith('http://') ||
+      path.startsWith('https://') ||
+      path.startsWith('file://')
+    ) {
       return path;
     }
 
-    // Sinon, c'est un chemin local
     return path;
   }
 
+  // (Optionnel) Compression d'image — ici sans compression
   static async compressImage(uri: string): Promise<string> {
     try {
-      console.log('🗜️ Compression d\'image...');
-      // Pour l'instant, on retourne l'URI sans compression
-      // On pourrait utiliser expo-image-manipulator pour compresser réellement
-      console.log('✅ Image prête (pas de compression appliquée)');
-      return uri;
+      console.log('🗜️ Compression image (placeholder)...');
+      return uri; // pas de compression pour l'instant
     } catch (error) {
       console.error('❌ Erreur compression image:', error);
       return uri;
     }
   }
 
-  static isValidImageUrl(url: string | undefined | null): boolean {
+  // Vérifier si une URL est valide
+  static isValidImageUrl(url?: string | null): boolean {
     if (!url) return false;
 
-    // Accepter les URLs HTTP/HTTPS et les chemins locaux
+    // Fichiers locaux autorisés
     if (url.startsWith('file://') || url.startsWith(this.IMAGES_DIR)) {
       return true;
     }
 
+    // Vérifie si c'est une vraie URL HTTP/HTTPS
     try {
-      const parsedUrl = new URL(url);
-      return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:';
+      const parsed = new URL(url);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
     } catch {
       return false;
     }
   }
-}
+
+  // Vérifier l'existence d'un fichier avec l'API legacy
+  static async fileExists(uri: string): Promise<boolean> {
+    try {
+      const fileInfo = await FileSystem.getInfoAsync(uri);
+      return fileInfo.exists;
+    } catch {
+      return false;
+    }
+  }
+
+  // Obtenir les informations d'un fichier
+  static async getFileInfo(uri: string) {
+    try {
+      return await FileSystem.getInfoAsync(uri);
+    } catch (error) {
+      console.error('❌ Erreur getFileInfo:', error);
+      return null;
+    }
+  }
+} 

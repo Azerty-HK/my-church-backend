@@ -3,11 +3,15 @@ import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { UpdateChecker } from '../components/UpdateChecker';
-import { ChurchProvider } from '../contexts/ChurchContext'
+import { ChurchProvider } from '../contexts/ChurchContext';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
+import { useNotifications } from '../hooks/useNotifications';
 
 export default function RootLayout() {
   useFrameworkReady();
+  
+  // Initialize notifications system
+  useNotifications();
 
   return (
     <UpdateChecker>

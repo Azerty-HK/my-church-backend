@@ -1,6 +1,6 @@
 import 'react-native-get-random-values';
-import { DatabaseService } from './database';
-import type { Church, User, SignUpData, CreateUserData } from '../types/database';
+import { DatabaseService } from './database.ts';
+import type { Church, User, SignUpData, CreateUserData } from '../types/database.ts';
 
 export interface AuthUser {
   id: string;

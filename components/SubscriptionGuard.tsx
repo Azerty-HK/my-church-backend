@@ -71,7 +71,7 @@ export function SubscriptionGuard({ children }: SubscriptionGuardProps) {
 
   return (
     <View style={styles.container}>
-      {children}
+      {!showModal && children}
       <SubscriptionExpiredModal
         visible={showModal}
         subscriptionStatus={subscriptionStatus}

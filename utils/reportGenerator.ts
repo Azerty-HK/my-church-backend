@@ -1,11 +1,12 @@
 import type { Church, DailyReport, Expense, Member, Archive, MemberDossier, DossierMetrics } from '../types/database';
-import { formatAmount, getCurrencySymbol, formatCurrency } from './currency';
+import { formatAmount, getCurrencySymbol, formatCurrency, getTotalInMainCurrency, formatAllBalances } from './currency';
 
 export interface ReportOptions {
   includeDetails?: boolean;
   includeCharts?: boolean;
   includeDossiers?: boolean;
   format?: 'text' | 'html' | 'json';
+  showAllCurrencies?: boolean;
 }
 
 export class ReportGenerator {
@@ -16,30 +17,102 @@ export class ReportGenerator {
     period: string,
     options: ReportOptions = {}
   ): string {
-    const { includeDetails = true, format = 'text', includeDossiers = false } = options;
+    const { 
+      includeDetails = true, 
+      format = 'text', 
+      includeDossiers = false,
+      showAllCurrencies = true 
+    } = options;
     
     const approvedExpenses = expenses.filter(expense => expense.is_approved);
     const pendingExpenses = expenses.filter(expense => !expense.is_approved);
     
-    const totalIncome = dailyReports.reduce((sum, report) => sum + Number(report.amount), 0);
-    const totalExpenses = approvedExpenses.reduce((sum, expense) => sum + Number(expense.amount), 0);
-    const pendingAmount = pendingExpenses.reduce((sum, expense) => sum + Number(expense.amount), 0);
-    const balance = totalIncome - totalExpenses;
+    // Calculs par devise
+    const calculateByCurrency = (items: DailyReport[] | Expense[]) => {
+      const result = {
+        FC: 0,
+        USD: 0,
+        EURO: 0,
+        total: 0
+      };
+      
+      items.forEach(item => {
+        const amount = Number(item.amount) || 0;
+        if (item.currency === 'FC') result.FC += amount;
+        else if (item.currency === 'USD') result.USD += amount;
+        else if (item.currency === 'EURO') result.EURO += amount;
+        result.total += amount;
+      });
+      
+      return result;
+    };
 
-    const currencySymbol = getCurrencySymbol(church.currency);
+    const totalIncome = calculateByCurrency(dailyReports);
+    const totalExpenses = calculateByCurrency(approvedExpenses);
+    const pendingAmount = calculateByCurrency(pendingExpenses);
+    
+    // Balance par devise
+    const balanceFC = totalIncome.FC - totalExpenses.FC;
+    const balanceUSD = totalIncome.USD - totalExpenses.USD;
+    const balanceEURO = totalIncome.EURO - totalExpenses.EURO;
+    
+    // Calcul du total en devise principale
+    const totalBalanceMainCurrency = getTotalInMainCurrency({
+      FC: balanceFC,
+      USD: balanceUSD,
+      EURO: balanceEURO
+    }, church.currency);
+
+    // Soldes actuels de l'église
+    const churchBalanceFC = (church.current_balance_fc || 0) + (church.bank_balance_fc || 0);
+    const churchBalanceUSD = (church.current_balance_usd || 0) + (church.bank_balance_usd || 0);
+    const churchBalanceEURO = (church.current_balance_euro || 0) + (church.bank_balance_euro || 0);
+    
+    // Total général en devise principale
+    const totalChurchBalance = getTotalInMainCurrency({
+      FC: churchBalanceFC,
+      USD: churchBalanceUSD,
+      EURO: churchBalanceEURO
+    }, church.currency);
 
     if (format === 'json') {
       return JSON.stringify({
         generatedBy: church.name,
         church: church.name,
         period,
-        currency: church.currency,
+        mainCurrency: church.currency,
         summary: {
-          totalIncome,
-          totalExpenses,
-          pendingAmount,
-          balance,
+          totalIncome: totalIncome.total,
+          totalIncomeByCurrency: totalIncome,
+          totalExpenses: totalExpenses.total,
+          totalExpensesByCurrency: totalExpenses,
+          pendingAmount: pendingAmount.total,
+          pendingAmountByCurrency: pendingAmount,
+          balanceByCurrency: {
+            FC: balanceFC,
+            USD: balanceUSD,
+            EURO: balanceEURO
+          },
+          totalBalanceMainCurrency,
           transactionCount: dailyReports.length + expenses.length
+        },
+        currentBalances: {
+          cash: {
+            FC: church.current_balance_fc || 0,
+            USD: church.current_balance_usd || 0,
+            EURO: church.current_balance_euro || 0
+          },
+          bank: {
+            FC: church.bank_balance_fc || 0,
+            USD: church.bank_balance_usd || 0,
+            EURO: church.bank_balance_euro || 0
+          },
+          totalByCurrency: {
+            FC: churchBalanceFC,
+            USD: churchBalanceUSD,
+            EURO: churchBalanceEURO
+          },
+          totalMainCurrency: totalChurchBalance
         },
         details: includeDetails ? {
           dailyReports,
@@ -50,6 +123,10 @@ export class ReportGenerator {
       }, null, 2);
     }
 
+    // Calcul des totaux caisse et banque
+    const totalCaisse = (church.current_balance_fc || 0) + (church.current_balance_usd || 0) + (church.current_balance_euro || 0);
+    const totalBanque = (church.bank_balance_fc || 0) + (church.bank_balance_usd || 0) + (church.bank_balance_euro || 0);
+
     const report = `
 ╔══════════════════════════════════════════════════════════════╗
 ║                    RAPPORT FINANCIER                         ║
@@ -59,21 +136,68 @@ export class ReportGenerator {
 Ce rapport a été généré par : ${church.name}
 
 ÉGLISE: ${church.name}
-ADRESSE: ${church.address || 'Non spécifiée'}
+DEVISE PRINCIPALE: ${church.currency} ⭐
 EMAIL: ${church.email}
-TÉLÉPHONE: ${church.phone || 'Non spécifié'}
-DEVISE: ${church.currency} (${currencySymbol})
+${church.phone ? `TÉLÉPHONE: ${church.phone}` : ''}
+${church.address ? `ADRESSE: ${church.address}` : ''}
 
 ═══════════════════════════════════════════════════════════════
-                        RÉSUMÉ FINANCIER
+                  RÉSUMÉ FINANCIER MULTI-DEVISES
 ═══════════════════════════════════════════════════════════════
 
-💰 REVENUS TOTAUX:           ${formatAmount(totalIncome, church.currency)}
-💸 DÉPENSES APPROUVÉES:      ${formatAmount(totalExpenses, church.currency)}
-⏳ DÉPENSES EN ATTENTE:      ${formatAmount(pendingAmount, church.currency)}
-📊 SOLDE NET:               ${formatAmount(balance, church.currency)}
-🏦 SOLDE CAISSE ACTUEL:     ${formatAmount(church.current_balance, church.currency)}
-🏛️ SOLDE BANQUE ACTUEL:     ${formatAmount(church.bank_balance, church.currency)}
+💰 COMPTE RENDUS TOTAUX:           ${formatAmount(totalIncome.total, church.currency)}
+   • FC: ${formatAmount(totalIncome.FC, 'FC')}
+   • USD: ${formatAmount(totalIncome.USD, 'USD')}
+   • EURO: ${formatAmount(totalIncome.EURO, 'EURO')}
+
+💸 DÉPENSES APPROUVÉES:      ${formatAmount(totalExpenses.total, church.currency)}
+   • FC: ${formatAmount(totalExpenses.FC, 'FC')}
+   • USD: ${formatAmount(totalExpenses.USD, 'USD')}
+   • EURO: ${formatAmount(totalExpenses.EURO, 'EURO')}
+
+⏳ DÉPENSES EN ATTENTE:      ${formatAmount(pendingAmount.total, church.currency)}
+   • FC: ${formatAmount(pendingAmount.FC, 'FC')}
+   • USD: ${formatAmount(pendingAmount.USD, 'USD')}
+   • EURO: ${formatAmount(pendingAmount.EURO, 'EURO')}
+
+📊 SOLDE NET PAR DÉPART:
+   • FC: ${formatAmount(balanceFC, 'FC')}
+   • USD: ${formatAmount(balanceUSD, 'USD')}
+   • EURO: ${formatAmount(balanceEURO, 'EURO')}
+
+📈 TOTAL NET (${church.currency}): ${formatAmount(totalBalanceMainCurrency, church.currency)}
+
+═══════════════════════════════════════════════════════════════
+                    SOLDES ACTUELS PAR DÉPART
+═══════════════════════════════════════════════════════════════
+
+💰 CAISSE:
+   • FC: ${formatAmount(church.current_balance_fc || 0, 'FC')}
+   • USD: ${formatAmount(church.current_balance_usd || 0, 'USD')}
+   • EURO: ${formatAmount(church.current_balance_euro || 0, 'EURO')}
+
+🏦 BANQUE:
+   • FC: ${formatAmount(church.bank_balance_fc || 0, 'FC')}
+   • USD: ${formatAmount(church.bank_balance_usd || 0, 'USD')}
+   • EURO: ${formatAmount(church.bank_balance_euro || 0, 'EURO')}
+
+═══════════════════════════════════════════════════════════════
+                    DÉTAIL DES DÉPENSES PAR DEVISE
+═══════════════════════════════════════════════════════════════
+
+${approvedExpenses.length > 0 ? `
+📊 DÉPENSES FC: ${formatAmount(totalExpenses.FC, 'FC')}
+📊 DÉPENSES USD: ${formatAmount(totalExpenses.USD, 'USD')}
+📊 DÉPENSES EURO: ${formatAmount(totalExpenses.EURO, 'EURO')}
+` : 'Aucune dépense approuvée'}
+
+═══════════════════════════════════════════════════════════════
+                    TOTAL GÉNÉRAL PAR DÉPART
+═══════════════════════════════════════════════════════════════
+
+📊 TOTAL CAISSE:            ${formatAmount(totalCaisse, church.currency)}
+📊 TOTAL BANQUE:            ${formatAmount(totalBanque, church.currency)}
+📊 TOTAL GÉNÉRAL:          ${formatAmount(totalChurchBalance, church.currency)}
 
 📈 NOMBRE DE TRANSACTIONS:   ${dailyReports.length + expenses.length}
    • Comptes rendus: ${dailyReports.length}
@@ -81,11 +205,14 @@ DEVISE: ${church.currency} (${currencySymbol})
 
 ${includeDetails ? `
 ═══════════════════════════════════════════════════════════════
-                    DÉTAIL DES COMPTES RENDUS
+                    DÉTAIL DES TRANSACTIONS PAR DEVISE
 ═══════════════════════════════════════════════════════════════
 
+=== COMPTES RENDUS ===
+
 ${dailyReports.length > 0 ? dailyReports.map(report => {
-  let line = `📅 ${new Date(report.date).toLocaleDateString('fr-FR')} | ${formatAmount(Number(report.amount), church.currency)} | ${report.description} | ${report.category} | Par: ${report.recorded_by}`;
+  const currencySymbol = getCurrencySymbol(report.currency);
+  let line = `📅 ${new Date(report.date).toLocaleDateString('fr-FR')} | ${formatAmount(Number(report.amount), report.currency)} | ${report.description} | ${report.category} | ${report.currency} | Par: ${report.recorded_by}`;
   
   if (report.bills_breakdown && report.bills_breakdown.length > 0) {
     const billsDetail = report.bills_breakdown.filter(b => b.quantity > 0).map(b => `${b.quantity}×${b.bill_label}`).join(', ');
@@ -95,22 +222,20 @@ ${dailyReports.length > 0 ? dailyReports.map(report => {
   return line;
 }).join('\n') : 'Aucun compte rendu enregistré'}
 
-═══════════════════════════════════════════════════════════════
-                    DÉTAIL DES DÉPENSES APPROUVÉES
-═══════════════════════════════════════════════════════════════
+=== DÉPENSES APPROUVÉES ===
 
-${approvedExpenses.length > 0 ? approvedExpenses.map(expense => 
-  `📅 ${new Date(expense.date).toLocaleDateString('fr-FR')} | ${formatAmount(Number(expense.amount), church.currency)} | ${expense.description} | Catégorie: ${expense.category || 'Général'} | Par: ${expense.recorded_by}${expense.approved_by ? ` | Approuvé par: ${expense.approved_by}` : ''}`
-).join('\n') : 'Aucune dépense approuvée'}
+${approvedExpenses.length > 0 ? approvedExpenses.map(expense => {
+  const currencySymbol = getCurrencySymbol(expense.currency);
+  return `📅 ${new Date(expense.date).toLocaleDateString('fr-FR')} | ${formatAmount(Number(expense.amount), expense.currency)} | ${expense.description} | Catégorie: ${expense.category || 'Général'} | ${expense.currency} | Par: ${expense.recorded_by}${expense.approved_by ? ` | Approuvé par: ${expense.approved_by}` : ''}`;
+}).join('\n') : 'Aucune dépense approuvée'}
 
 ${pendingExpenses.length > 0 ? `
-═══════════════════════════════════════════════════════════════
-                    DÉPENSES EN ATTENTE D'APPROBATION
-═══════════════════════════════════════════════════════════════
+=== DÉPENSES EN ATTENTE ===
 
-${pendingExpenses.map(expense => 
-  `📅 ${new Date(expense.date).toLocaleDateString('fr-FR')} | ${formatAmount(Number(expense.amount), church.currency)} | ${expense.description} | Catégorie: ${expense.category || 'Général'} | Par: ${expense.recorded_by}`
-).join('\n')}` : ''}
+${pendingExpenses.map(expense => {
+  const currencySymbol = getCurrencySymbol(expense.currency);
+  return `📅 ${new Date(expense.date).toLocaleDateString('fr-FR')} | ${formatAmount(Number(expense.amount), expense.currency)} | ${expense.description} | Catégorie: ${expense.category || 'Général'} | ${expense.currency} | Par: ${expense.recorded_by}`;
+}).join('\n')}` : ''}
 ` : ''}
 
 ═══════════════════════════════════════════════════════════════
@@ -168,6 +293,17 @@ ${pendingExpenses.map(expense =>
       archive: members.filter(m => m.dossier_status === 'archive').length,
     };
 
+    // Calcul de la masse salariale par devise
+    const salaryByCurrency: Record<string, number> = { FC: 0, USD: 0, EURO: 0 };
+    personnelMembers.forEach(member => {
+      if (member.salary && member.currency) {
+        const currency = member.currency.toUpperCase() as 'FC' | 'USD' | 'EURO';
+        if (salaryByCurrency.hasOwnProperty(currency)) {
+          salaryByCurrency[currency] += Number(member.salary) || 0;
+        }
+      }
+    });
+
     if (format === 'json') {
       return JSON.stringify({
         generatedBy: church.name,
@@ -180,7 +316,8 @@ ${pendingExpenses.map(expense =>
           withDossier: membersWithDossier,
           dossierStats: dossierStatusStats,
           departments: Object.fromEntries(departmentStats),
-          positions: Object.fromEntries(positionStats)
+          positions: Object.fromEntries(positionStats),
+          salaryByCurrency
         },
         details: includeDetails ? {
           personnel: personnelMembers,
@@ -189,6 +326,20 @@ ${pendingExpenses.map(expense =>
         generatedAt: new Date().toISOString()
       }, null, 2);
     }
+
+    const salarySection = personnelMembers.length > 0 ? `
+═══════════════════════════════════════════════════════════════
+                       MASSE SALARIALE PAR DEVISE
+═══════════════════════════════════════════════════════════════
+
+💼 TOTAL SALAIRES:
+${Object.entries(salaryByCurrency)
+  .filter(([_, amount]) => amount > 0)
+  .map(([currency, amount]) => `   • ${currency}: ${formatAmount(amount, currency)}`)
+  .join('\n') || '   • Aucun salaire enregistré'}
+
+💼 TOTAL (${church.currency}): ${formatAmount(getTotalInMainCurrency(salaryByCurrency, church.currency), church.currency)}
+` : '';
 
     const dossierSection = includeDossiers ? `
 ═══════════════════════════════════════════════════════════════
@@ -214,7 +365,7 @@ ${pendingExpenses.map(expense =>
 Ce rapport a été généré par : ${church.name}
 
 ÉGLISE: ${church.name}
-ADRESSE: ${church.address || 'Non spécifiée'}
+DEVISE PRINCIPALE: ${church.currency} ⭐
 EMAIL: ${church.email}
 
 ═══════════════════════════════════════════════════════════════
@@ -224,6 +375,8 @@ EMAIL: ${church.email}
 👥 TOTAL DES MEMBRES:        ${members.length}
 👔 PERSONNEL:               ${personnelMembers.length}
 🙏 MEMBRES RÉGULIERS:       ${regularMembers.length}
+
+${salarySection}
 
 ${dossierSection}
 
@@ -248,7 +401,7 @@ ${personnelMembers.length > 0 ? personnelMembers.map(member =>
    📞 Téléphone: ${member.phone || 'Non spécifié'}
    🏢 Poste: ${member.position || 'Non spécifié'}
    📋 Départements: ${member.departments?.join(', ') || 'Aucun'}
-   💰 Salaire: ${member.salary ? formatAmount(member.salary, church.currency) : 'Non spécifié'}
+   💰 Salaire: ${member.salary ? formatAmount(member.salary, member.currency || church.currency) : 'Non spécifié'}
    📱 QR Code: ${member.qr_code || 'Non généré'}
    📁 Dossier: ${member.has_dossier ? (member.dossier_status ? `✅ ${member.dossier_status.charAt(0).toUpperCase() + member.dossier_status.slice(1)}` : '✅ Disponible') : '❌ Non créé'}
    📅 Inscrit le: ${new Date(member.created_at || '').toLocaleDateString('fr-FR')}
@@ -279,6 +432,7 @@ ${regularMembers.length > 0 ? regularMembers.map(member =>
 ⛪ Église: ${church.name}
 📧 Contact: ${church.email}
 📁 Système de dossiers: ${church.dossier_auto_create ? '✅ Activé' : '❌ Désactivé'}
+📋 Dossier requis personnel: ${church.dossier_required_for_personnel ? '✅ Oui' : '❌ Non'}
 
 ═══════════════════════════════════════════════════════════════
     `.trim();
@@ -302,6 +456,39 @@ ${regularMembers.length > 0 ? regularMembers.map(member =>
       return member ? `${member.first_name} ${member.last_name}` : 'Membre inconnu';
     };
 
+    // Calcul des statistiques financières des dossiers par devise
+    const dossierFinancialStats = {
+      totalPayments: { FC: 0, USD: 0, EURO: 0 },
+      averagePayment: { FC: 0, USD: 0, EURO: 0 }
+    };
+
+    dossiers.forEach(dossier => {
+      if (dossier.documents) {
+        dossier.documents.forEach(doc => {
+          if (doc.amount && doc.currency) {
+            const currency = doc.currency.toUpperCase() as keyof typeof dossierFinancialStats.totalPayments;
+            if (dossierFinancialStats.totalPayments.hasOwnProperty(currency)) {
+              dossierFinancialStats.totalPayments[currency] += Number(doc.amount) || 0;
+            }
+          }
+        });
+      }
+    });
+
+    // Calcul des moyennes
+    Object.keys(dossierFinancialStats.totalPayments).forEach(currency => {
+      const key = currency as keyof typeof dossierFinancialStats.totalPayments;
+      const count = dossiers.filter(d => 
+        d.documents?.some(doc => doc.currency?.toUpperCase() === key && doc.amount)
+      ).length;
+      dossierFinancialStats.averagePayment[key] = count > 0 ? 
+        dossierFinancialStats.totalPayments[key] / count : 0;
+    });
+
+    // Calcul du total en devise principale
+    const totalPaymentsMainCurrency = getTotalInMainCurrency(dossierFinancialStats.totalPayments, church.currency);
+    const averagePaymentMainCurrency = getTotalInMainCurrency(dossierFinancialStats.averagePayment, church.currency);
+
     return `
 ╔══════════════════════════════════════════════════════════════╗
 ║                   RAPPORT DES DOSSIERS                      ║
@@ -311,7 +498,7 @@ ${regularMembers.length > 0 ? regularMembers.map(member =>
 Ce rapport a été généré par : ${church.name}
 
 ÉGLISE: ${church.name}
-ADRESSE: ${church.address || 'Non spécifiée'}
+DEVISE PRINCIPALE: ${church.currency} ⭐
 EMAIL: ${church.email}
 
 ═══════════════════════════════════════════════════════════════
@@ -339,6 +526,28 @@ EMAIL: ${church.email}
 📝 EN RÉVISION:             ${dossierMetrics.dossiersByStatus.en_revision || 0}
 ⚠️ INCOMPLETS:              ${dossierMetrics.dossiersByStatus.incomplet || 0}
 🗄️ ARCHIVÉS:                ${dossierMetrics.dossiersByStatus.archive || 0}
+
+═══════════════════════════════════════════════════════════════
+              STATISTIQUES FINANCIÈRES DES DOSSIERS
+═══════════════════════════════════════════════════════════════
+
+💰 PAIEMENTS TOTAUX:
+${Object.entries(dossierFinancialStats.totalPayments)
+  .filter(([_, amount]) => amount > 0)
+  .map(([currency, amount]) => 
+    `   • ${currency}: ${formatAmount(amount, currency)}`
+  ).join('\n') || '   Aucun paiement enregistré'}
+
+💰 TOTAL (${church.currency}): ${formatAmount(totalPaymentsMainCurrency, church.currency)}
+
+📊 MOYENNE PAR DOSSIER:
+${Object.entries(dossierFinancialStats.averagePayment)
+  .filter(([_, amount]) => amount > 0)
+  .map(([currency, amount]) => 
+    `   • ${currency}: ${formatAmount(amount, currency)}`
+  ).join('\n') || '   Aucune moyenne disponible'}
+
+📊 MOYENNE (${church.currency}): ${formatAmount(averagePaymentMainCurrency, church.currency)}
 
 ═══════════════════════════════════════════════════════════════
               TYPES DE DOCUMENTS LES PLUS COURANTS
@@ -421,13 +630,31 @@ ${this.generateDossierRecommendations(dossierMetrics, totalMembers, membersWithD
     dossierMetrics: DossierMetrics,
     period: string
   ): string {
-    const financialReport = this.generateFinancialReport(church, dailyReports, expenses, period, { includeDetails: false });
-    const membersReport = this.generateMembersReport(church, members, period, { includeDetails: false, includeDossiers: true });
+    const financialReport = this.generateFinancialReport(church, dailyReports, expenses, period, { 
+      includeDetails: false,
+      showAllCurrencies: true 
+    });
+    
+    const membersReport = this.generateMembersReport(church, members, period, { 
+      includeDetails: false, 
+      includeDossiers: true 
+    });
+    
     const dossierReport = this.generateDossierReport(church, dossiers, members, dossierMetrics, period);
     
-    const totalSalaries = members
+    // Calcul de la masse salariale par devise
+    const salaryByCurrency: Record<string, number> = { FC: 0, USD: 0, EURO: 0 };
+    members
       .filter(m => m.member_type === 'Personnel' && m.salary)
-      .reduce((sum, m) => sum + Number(m.salary || 0), 0);
+      .forEach(member => {
+        const currency = member.currency?.toUpperCase() as keyof typeof salaryByCurrency || 'FC';
+        if (salaryByCurrency.hasOwnProperty(currency)) {
+          salaryByCurrency[currency] += Number(member.salary) || 0;
+        }
+      });
+
+    // Calcul du total en devise principale
+    const totalSalariesMainCurrency = getTotalInMainCurrency(salaryByCurrency, church.currency);
 
     return `
 ╔══════════════════════════════════════════════════════════════╗
@@ -440,10 +667,17 @@ Ce rapport a été généré par : ${church.name}
 ${financialReport}
 
 ═══════════════════════════════════════════════════════════════
-                    ANALYSE DES SALAIRES
+                    ANALYSE DES SALAIRES PAR DEVISE
 ═══════════════════════════════════════════════════════════════
 
-💼 MASSE SALARIALE TOTALE:   ${formatAmount(totalSalaries, church.currency)}
+💼 MASSE SALARIALE PAR DEVISE:
+${Object.entries(salaryByCurrency)
+  .filter(([_, amount]) => amount > 0)
+  .map(([currency, amount]) => 
+    `   • ${currency}: ${formatAmount(amount, currency)}`
+  ).join('\n') || '   Aucun salaire enregistré'}
+
+💼 TOTAL (${church.currency}): ${formatAmount(totalSalariesMainCurrency, church.currency)}
 👔 PERSONNEL RÉMUNÉRÉ:       ${members.filter(m => m.salary && m.salary > 0).length}
 
 ${membersReport}
@@ -525,26 +759,54 @@ ${this.generateRecommendations(church, dailyReports, expenses, members, dossiers
   ): string {
     const recommendations: string[] = [];
     
-    const totalIncome = reports.reduce((sum, r) => sum + Number(r.amount), 0);
-    const totalExpenses = expenses.filter(e => e.is_approved).reduce((sum, e) => sum + Number(e.amount), 0);
-    const expenseRatio = totalIncome > 0 ? (totalExpenses / totalIncome) * 100 : 0;
+    // Calcul des totaux par devise
+    const totalIncome = {
+      FC: reports.filter(r => r.currency === 'FC').reduce((sum, r) => sum + Number(r.amount), 0),
+      USD: reports.filter(r => r.currency === 'USD').reduce((sum, r) => sum + Number(r.amount), 0),
+      EURO: reports.filter(r => r.currency === 'EURO').reduce((sum, r) => sum + Number(r.amount), 0)
+    };
+    
+    const totalExpenses = {
+      FC: expenses.filter(e => e.is_approved && e.currency === 'FC').reduce((sum, e) => sum + Number(e.amount), 0),
+      USD: expenses.filter(e => e.is_approved && e.currency === 'USD').reduce((sum, e) => sum + Number(e.amount), 0),
+      EURO: expenses.filter(e => e.is_approved && e.currency === 'EURO').reduce((sum, e) => sum + Number(e.amount), 0)
+    };
 
-    if (expenseRatio > 80) {
-      recommendations.push('⚠️  Ratio dépenses/revenus élevé (>80%). Considérez réduire les dépenses.');
+    // Vérifications par devise pour la caisse
+    if (church.current_balance_fc < 0) {
+      recommendations.push('🚨 Solde caisse FC négatif. Planifiez des activités génératrices de compte rendus en FC.');
+    }
+    if (church.current_balance_usd < 0) {
+      recommendations.push('💰 Solde caisse USD négatif. Surveillez les dépenses en USD.');
+    }
+    if (church.current_balance_euro < 0) {
+      recommendations.push('💶 Solde caisse EURO négatif. Gestion à surveiller en EURO.');
     }
 
-    if (church.current_balance < 0) {
-      recommendations.push('🚨 Solde caisse négatif. Planifiez des activités génératrices de revenus.');
+    // Vérifications par devise pour la banque
+    if (church.bank_balance_fc < 0) {
+      recommendations.push('🏦 Solde banque FC négatif. Vérifiez les découverts autorisés.');
+    }
+    if (church.bank_balance_usd < 0) {
+      recommendations.push('💳 Solde banque USD négatif. Équilibrez les entrées/sorties USD.');
+    }
+    if (church.bank_balance_euro < 0) {
+      recommendations.push('🏛️ Solde banque EURO négatif. Priorisez les rentrées en EURO.');
     }
 
-    if (church.bank_balance < 0) {
-      recommendations.push('🏦 Solde banque négatif. Vérifiez les découverts autorisés.');
+    // Dépenses en attente par devise
+    const pendingExpensesByCurrency = {
+      FC: expenses.filter(e => !e.is_approved && e.currency === 'FC').length,
+      USD: expenses.filter(e => !e.is_approved && e.currency === 'USD').length,
+      EURO: expenses.filter(e => !e.is_approved && e.currency === 'EURO').length
+    };
+
+    const totalPending = pendingExpensesByCurrency.FC + pendingExpensesByCurrency.USD + pendingExpensesByCurrency.EURO;
+    if (totalPending > 5) {
+      recommendations.push(`📋 ${totalPending} dépenses en attente d\'approbation (FC: ${pendingExpensesByCurrency.FC}, USD: ${pendingExpensesByCurrency.USD}, EURO: ${pendingExpensesByCurrency.EURO}). Vérifiez les demandes.`);
     }
 
-    if (expenses.filter(e => !e.is_approved).length > 5) {
-      recommendations.push('📋 Plusieurs dépenses en attente d\'approbation. Vérifiez les demandes.');
-    }
-
+    // Membres
     if (members.length < 10) {
       recommendations.push('👥 Peu de membres enregistrés. Encouragez l\'inscription des membres.');
     }
@@ -567,8 +829,23 @@ ${this.generateRecommendations(church, dailyReports, expenses, members, dossiers
       }
     }
 
+    // Recommandations basées sur les ratios revenus/dépenses par devise
+    const incomeExpenseRatioFC = totalIncome.FC > 0 ? totalExpenses.FC / totalIncome.FC : 0;
+    const incomeExpenseRatioUSD = totalIncome.USD > 0 ? totalExpenses.USD / totalIncome.USD : 0;
+    const incomeExpenseRatioEURO = totalIncome.EURO > 0 ? totalExpenses.EURO / totalIncome.EURO : 0;
+
+    if (incomeExpenseRatioFC > 0.8) {
+      recommendations.push('⚠️ Ratio dépenses/comptes rendus FC élevé (>80%). Contrôlez les dépenses en FC.');
+    }
+    if (incomeExpenseRatioUSD > 0.9) {
+      recommendations.push('💰 Ratio dépenses/comptes rendus USD très élevé (>90%). Surveillez les dépenses USD.');
+    }
+    if (incomeExpenseRatioEURO > 0.7) {
+      recommendations.push('💶 Ratio dépenses/comptes rendus EURO modéré (>70%). Surveillez EURO.');
+    }
+
     if (recommendations.length === 0) {
-      recommendations.push('✅ Excellente gestion ! Continuez sur cette voie.');
+      recommendations.push('✅ Excellente gestion multi-devises ! Continuez sur cette voie.');
     }
 
     return recommendations.join('\n');
@@ -587,6 +864,9 @@ ${this.generateRecommendations(church, dailyReports, expenses, members, dossiers
           if (typeof value === 'string' && value.includes(',')) {
             return `"${value.replace(/"/g, '""')}"`;
           }
+          if (typeof value === 'object') {
+            return `"${JSON.stringify(value).replace(/"/g, '""')}"`;
+          }
           return value;
         }).join(',')
       )
@@ -596,6 +876,27 @@ ${this.generateRecommendations(church, dailyReports, expenses, members, dossiers
   }
 
   static exportDossierToPDF(dossier: MemberDossier, member: Member, church: Church): string {
+    // Calcul des statistiques financières du dossier
+    const financialStats = {
+      totalPayments: { FC: 0, USD: 0, EURO: 0 },
+      paymentCount: 0
+    };
+
+    if (dossier.documents) {
+      dossier.documents.forEach(doc => {
+        if (doc.amount && doc.currency) {
+          const currency = doc.currency.toUpperCase() as keyof typeof financialStats.totalPayments;
+          if (financialStats.totalPayments.hasOwnProperty(currency)) {
+            financialStats.totalPayments[currency] += Number(doc.amount) || 0;
+            financialStats.paymentCount++;
+          }
+        }
+      });
+    }
+
+    // Calcul du total en devise principale
+    const totalPaymentsMainCurrency = getTotalInMainCurrency(financialStats.totalPayments, church.currency);
+
     const html = `
       <!DOCTYPE html>
       <html>
@@ -614,6 +915,12 @@ ${this.generateRecommendations(church, dailyReports, expenses, members, dossiers
           .document-list { list-style: none; padding: 0; }
           .document-item { padding: 10px; border-bottom: 1px solid #eee; }
           .footer { margin-top: 40px; text-align: center; font-size: 12px; color: #999; }
+          .financial-summary { background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; }
+          .currency-amount { margin: 5px 0; padding: 5px; border-left: 3px solid; }
+          .fc { border-left-color: #27ae60; background: #e8f6ef; }
+          .usd { border-left-color: #2980b9; background: #ebf5fb; }
+          .euro { border-left-color: #8e44ad; background: #f4ecf7; }
+          .main-currency { border-left-color: #f39c12; background: #fff3cd; border: 2px solid #f39c12; }
         </style>
       </head>
       <body>
@@ -621,6 +928,9 @@ ${this.generateRecommendations(church, dailyReports, expenses, members, dossiers
           <div class="church-name">${church.name}</div>
           <div class="report-title">📁 DOSSIER DU MEMBRE</div>
           <div>${member.first_name} ${member.last_name}</div>
+          <div style="font-size: 12px; color: #7f8c8d; margin-top: 5px;">
+            Devise principale: ${church.currency} ⭐
+          </div>
         </div>
         
         <div class="section">
@@ -653,6 +963,29 @@ ${this.generateRecommendations(church, dailyReports, expenses, members, dossiers
           </div>
         </div>
         
+        ${financialStats.paymentCount > 0 ? `
+        <div class="section">
+          <div class="section-title">Résumé Financier</div>
+          <div class="financial-summary">
+            <div style="margin-bottom: 10px;">
+              <strong>Total des paiements:</strong> ${financialStats.paymentCount} paiement${financialStats.paymentCount > 1 ? 's' : ''}
+            </div>
+            ${Object.entries(financialStats.totalPayments)
+              .filter(([_, amount]) => amount > 0)
+              .map(([currency, amount]) => `
+                <div class="currency-amount ${currency.toLowerCase()}">
+                  <strong>${currency}:</strong> ${formatAmount(amount, currency)}
+                </div>
+              `).join('')}
+            ${totalPaymentsMainCurrency > 0 ? `
+              <div class="currency-amount main-currency" style="margin-top: 10px;">
+                <strong>⭐ TOTAL (${church.currency}):</strong> ${formatAmount(totalPaymentsMainCurrency, church.currency)}
+              </div>
+            ` : ''}
+          </div>
+        </div>
+        ` : ''}
+        
         ${dossier.documents && dossier.documents.length > 0 ? `
         <div class="section">
           <div class="section-title">Documents (${dossier.documents.length})</div>
@@ -660,6 +993,7 @@ ${this.generateRecommendations(church, dailyReports, expenses, members, dossiers
             ${dossier.documents.map(doc => `
               <li class="document-item">
                 <strong>${doc.title}</strong> (${doc.document_type})<br>
+                ${doc.amount ? `<small>Montant: ${formatAmount(doc.amount, doc.currency || church.currency)}</small><br>` : ''}
                 <small>Ajouté le ${new Date(doc.created_at).toLocaleDateString('fr-FR')} par ${doc.uploaded_by}</small>
               </li>
             `).join('')}
@@ -676,7 +1010,10 @@ ${this.generateRecommendations(church, dailyReports, expenses, members, dossiers
         
         <div class="footer">
           <p>Généré le ${new Date().toLocaleDateString('fr-FR')} • My Church - Système de Dossiers</p>
-          <p>${church.name} • ${church.address || ''} • ${church.email}</p>
+          <p>${church.name} • ${church.email}</p>
+          <p style="color: #7f8c8d; font-size: 10px; margin-top: 5px;">
+            Devises supportées: FC • USD • EURO • Devise principale: ${church.currency}
+          </p>
         </div>
       </body>
       </html>
@@ -684,4 +1021,4 @@ ${this.generateRecommendations(church, dailyReports, expenses, members, dossiers
     
     return html;
   }
-} 
+}

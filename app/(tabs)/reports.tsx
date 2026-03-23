@@ -19,6 +19,7 @@ import { formatCurrency } from '../../utils/currency';
 import { AdvancedReports } from '../../components/AdvancedReports';
 import { ArchivesManagement } from '../../components/ArchivesManagement';
 import { ArchiveManager } from '../../utils/archiveManager';
+import { ArchiveScheduler } from '../../services/archiveScheduler';
 import type { DailyReport, Expense, Archive as ArchiveType, Member } from '../../types/database';
 
 export default function ReportsScreen() {
@@ -49,17 +50,17 @@ export default function ReportsScreen() {
     try {
       console.log('📊 Chargement données rapports...');
       
-      const [archivesData, membersData, reportsData, expensesData] = await Promise.all([
-        DatabaseService.getArchives(church.id),
-        DatabaseService.getMembers(church.id),
-        DatabaseService.getDailyReports(church.id),
-        DatabaseService.getExpenses(church.id)
-      ]);
-
-      setArchives(archivesData);
-      setMembers(membersData);
-      setDailyReports(reportsData);
-      setExpenses(expensesData);
+      // ✅ CORRECTION: Utiliser les services directs, PAS fetch
+      const archivesData = await DatabaseService.getArchives(church.id);
+      const membersData = await DatabaseService.getMembers(church.id);
+      const reportsData = await DatabaseService.getDailyReports(church.id);
+      const expensesData = await DatabaseService.getExpenses(church.id);
+      
+      // ✅ Sécuriser les données avec Array.isArray
+      setArchives(Array.isArray(archivesData) ? archivesData : []);
+      setMembers(Array.isArray(membersData) ? membersData : []);
+      setDailyReports(Array.isArray(reportsData) ? reportsData : []);
+      setExpenses(Array.isArray(expensesData) ? expensesData : []);
       
       console.log('✅ Données rapports chargées');
     } catch (error) {
@@ -74,8 +75,8 @@ export default function ReportsScreen() {
     if (!church || !user) return;
 
     try {
-      // Vérifier si on doit créer des archives automatiques
-      await ArchiveManager.autoArchive(church.id);
+      // Vérifier si on doit créer des archives automatiques (rétroactif)
+      await ArchiveScheduler.checkAndCreateArchives(church.id);
     } catch (error) {
       console.error('❌ Erreur auto-archive:', error);
     }
@@ -153,11 +154,11 @@ export default function ReportsScreen() {
                 <Text style={styles.statLabel}>Archives</Text>
               </View>
               <View style={styles.statBadge}>
-                <Text style={styles.statNumber}>{archives.filter(a => a.period_type === 'monthly').length}</Text>
+                <Text style={styles.statNumber}>{archives.filter(a => a.archive_type === 'monthly').length}</Text>
                 <Text style={styles.statLabel}>Mensuels</Text>
               </View>
               <View style={styles.statBadge}>
-                <Text style={styles.statNumber}>{archives.filter(a => a.period_type === 'yearly').length}</Text>
+                <Text style={styles.statNumber}>{archives.filter(a => a.archive_type === 'yearly').length}</Text>
                 <Text style={styles.statLabel}>Annuels</Text>
               </View>
             </View>
@@ -300,7 +301,7 @@ export default function ReportsScreen() {
               <Text style={[styles.statValue, { color: colors.text }]}>
                 {dailyReports.length}
               </Text>
-              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
+              <Text style={[styles.statGridLabel, { color: colors.textSecondary }]}>
                 Comptes rendus
               </Text>
             </View>
@@ -309,7 +310,7 @@ export default function ReportsScreen() {
               <Text style={[styles.statValue, { color: colors.text }]}>
                 {expenses.length}
               </Text>
-              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
+              <Text style={[styles.statGridLabel, { color: colors.textSecondary }]}>
                 Dépenses totales
               </Text>
             </View>
@@ -318,7 +319,7 @@ export default function ReportsScreen() {
               <Text style={[styles.statValue, { color: colors.text }]}>
                 {members.length}
               </Text>
-              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
+              <Text style={[styles.statGridLabel, { color: colors.textSecondary }]}>
                 Membres actifs
               </Text>
             </View>
@@ -327,7 +328,7 @@ export default function ReportsScreen() {
               <Text style={[styles.statValue, { color: colors.text }]}>
                 {archives.length}
               </Text>
-              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
+              <Text style={[styles.statGridLabel, { color: colors.textSecondary }]}>
                 Archives créées
               </Text>
             </View>
@@ -639,7 +640,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 4,
   },
-  statLabel: {
+  statGridLabel: {
     fontSize: 12,
     textAlign: 'center',
   },

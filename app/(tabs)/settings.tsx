@@ -11,9 +11,8 @@ import {
   TextInput,
   Modal,
   ActivityIndicator,
-  Image,
 } from 'react-native';
-import { Settings, User, Church, Palette, DollarSign, Shield, Users, FileText, LogOut, Info, Crown, Eye, CreditCard, Star, MessageCircle, Camera, Upload, Download, Bell, X } from 'lucide-react-native';
+import { Settings, User, Church, Palette, DollarSign, Shield, Users, FileText, LogOut, Info, Crown, Eye, CreditCard, Star, MessageCircle, Download, Bell, X } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useChurch } from '../../contexts/ChurchContext';
 import { AuthService } from '../../lib/auth';
@@ -26,8 +25,6 @@ import { EventsManagement } from '../../components/EventsManagement';
 import { EventsManagerAdmin } from '../../components/EventsManagerAdmin';
 import { AboutModal } from '../../components/AboutModal';
 import { MessagingSystem } from '../../components/MessagingSystem';
-import { ImagePickerModal } from '../../components/ImagePickerModal';
-import { StorageService } from '../../lib/storage';
 import { getThemeColors, THEME_CONFIGS } from '../../lib/theme';
 import { SUPPORTED_CURRENCIES } from '../../utils/currency';
 import { UpdateService } from '../../services/updateService';
@@ -47,10 +44,9 @@ export default function SettingsScreen() {
   const [showMessaging, setShowMessaging] = useState(false);
   const [showSubscriptionManagement, setShowSubscriptionManagement] = useState(false);
   const [showPublicLinksModal, setShowPublicLinksModal] = useState(false);
-  const [showImagePicker, setShowImagePicker] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
 
-  // Formulaire église
+  // Formulaire église (SANS logo_url)
   const [churchForm, setChurchForm] = useState({
     name: '',
     address: '',
@@ -59,7 +55,6 @@ export default function SettingsScreen() {
     theme: 'blue' as 'blue' | 'white' | 'black',
     expense_limit: '',
     archive_frequency: 'monthly' as 'monthly' | 'yearly',
-    logo_url: '',
   });
   const [churchErrors, setChurchErrors] = useState<Record<string, string>>({});
   const [updatingChurch, setUpdatingChurch] = useState(false);
@@ -88,7 +83,6 @@ export default function SettingsScreen() {
         theme: church.theme,
         expense_limit: church.expense_limit?.toString() || '1000',
         archive_frequency: church.archive_frequency || 'monthly',
-        logo_url: church.logo_url || '',
       });
       loadPublicLinks();
     }
@@ -96,10 +90,10 @@ export default function SettingsScreen() {
 
   const loadPublicLinks = async () => {
     if (!church) return;
-    
     try {
+      // ✅ CORRECTION: Utiliser le service direct, PAS fetch
       const links = await DatabaseService.getChurchPublicLinks(church.id);
-      setPublicLinks(links);
+      setPublicLinks(Array.isArray(links) ? links : []);
     } catch (error) {
       console.error('❌ Erreur chargement liens publics:', error);
     }
@@ -119,6 +113,8 @@ export default function SettingsScreen() {
       errors.name = nameValidation.error!;
     }
     
+    // ADRESSE ET TÉLÉPHONE SONT OPTIONNELS - PAS DE VALIDATION
+    // Seule validation pour le téléphone s'il est rempli
     if (churchForm.phone.trim()) {
       const phoneValidation = ValidationService.validatePhone(churchForm.phone);
       if (!phoneValidation.isValid) {
@@ -126,7 +122,7 @@ export default function SettingsScreen() {
       }
     }
     
-    // CORRECTION : Validation manuelle de expense_limit
+    // Validation de expense_limit
     if (!churchForm.expense_limit.trim()) {
       errors.expense_limit = 'La limite de dépense est obligatoire';
     } else {
@@ -137,13 +133,6 @@ export default function SettingsScreen() {
         errors.expense_limit = 'Le montant doit être supérieur à 0';
       } else if (amount > 1000000) {
         errors.expense_limit = 'Le montant ne peut pas dépasser 1,000,000';
-      }
-    }
-
-    if (churchForm.logo_url.trim()) {
-      const urlValidation = ValidationService.validateUrl(churchForm.logo_url);
-      if (!urlValidation.isValid) {
-        errors.logo_url = urlValidation.error!;
       }
     }
     
@@ -170,17 +159,20 @@ export default function SettingsScreen() {
 
     setUpdatingChurch(true);
     try {
+      // SUPPRIMÉ: logo_url de tous les updates
       const updates = {
         name: churchForm.name.trim(),
-        address: churchForm.address.trim() || undefined,
-        phone: churchForm.phone.trim() || undefined,
-        currency: churchForm.currency,
+        // Adresse et téléphone optionnels - envoyer même si vides
+        address: churchForm.address.trim() || null,
+        phone: churchForm.phone.trim() || null,
+        // NE PAS PERMETTRE DE CHANGER LA DEVISE PRINCIPALE
         theme: churchForm.theme,
         expense_limit: parseFloat(churchForm.expense_limit) || 1000,
         archive_frequency: churchForm.archive_frequency,
-        logo_url: churchForm.logo_url.trim() || undefined,
       };
 
+      console.log('📤 Mise à jour église:', updates);
+      
       await updateChurch(updates);
       
       // Audit log
@@ -195,21 +187,15 @@ export default function SettingsScreen() {
       
       setShowChurchSettings(false);
       Alert.alert('✅ Succès', 'Paramètres de l\'église mis à jour avec succès');
+      
+      // Rafraîchir l'église après modification
+      await refreshChurch();
     } catch (error: any) {
+      console.error('❌ Erreur mise à jour église:', error);
       Alert.alert('❌ Erreur', error.message || 'Impossible de mettre à jour les paramètres');
     } finally {
       setUpdatingChurch(false);
     }
-  };
-
-  const handlePickLogo = () => {
-    setShowImagePicker(true);
-  };
-
-  const handleLogoSelected = (url: string) => {
-    setChurchForm(prev => ({ ...prev, logo_url: url }));
-    setShowImagePicker(false);
-    Alert.alert('✅ Logo sélectionné', 'Le logo a été mis à jour. N\'oubliez pas de sauvegarder vos modifications.');
   };
 
   const validateLinkForm = (): boolean => {
@@ -473,9 +459,6 @@ export default function SettingsScreen() {
           </View>
           
           <View style={styles.churchInfo}>
-            {church.logo_url && (
-              <Image source={{ uri: church.logo_url }} style={styles.churchLogo} />
-            )}
             <Text style={[styles.churchName, { color: colors.text }]}>
               {church.name}
             </Text>
@@ -492,11 +475,14 @@ export default function SettingsScreen() {
                 📍 {church.address}
               </Text>
             )}
-            <Text style={[styles.churchDetails, { color: colors.textSecondary }]}>
-              💰 Devise: {church.currency}
+            <Text style={[styles.churchDetails, { color: colors.text }]}>
+              ⭐ Devise principale: <Text style={{ fontWeight: 'bold' }}>{church.currency}</Text>
             </Text>
             <Text style={[styles.churchDetails, { color: colors.textSecondary }]}>
               🎨 Thème: {church.theme}
+            </Text>
+            <Text style={[styles.churchDetails, { color: colors.textSecondary }]}>
+              💰 Limite de dépense: {church.expense_limit || 1000} {church.currency}
             </Text>
           </View>
         </View>
@@ -676,38 +662,6 @@ export default function SettingsScreen() {
 
             <ScrollView style={styles.modalContent}>
               <View style={[styles.formSection, { backgroundColor: colors.surface }]}>
-                {/* Logo de l'église */}
-                <View style={styles.logoSection}>
-                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>🖼️ Logo de l'église</Text>
-                  {churchForm.logo_url ? (
-                    <View style={styles.logoPreview}>
-                      <Image source={{ uri: churchForm.logo_url }} style={styles.logoImage} />
-                      <TouchableOpacity 
-                        style={styles.logoChangeButton}
-                        onPress={handlePickLogo}
-                      >
-                        <Camera size={16} color={colors.primary} />
-                        <Text style={[styles.logoChangeText, { color: colors.primary }]}>
-                          Changer
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  ) : (
-                    <TouchableOpacity 
-                      style={[styles.logoUploadButton, { borderColor: colors.border }]}
-                      onPress={handlePickLogo}
-                    >
-                      <Upload size={24} color={colors.textSecondary} />
-                      <Text style={[styles.logoUploadText, { color: colors.textSecondary }]}>
-                        Ajouter un logo
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                  <Text style={[styles.fieldHelp, { color: colors.textSecondary }]}>
-                    💡 Un logo par défaut sera utilisé si aucun logo n'est fourni
-                  </Text>
-                </View>
-
                 <View style={styles.formField}>
                   <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Nom de l'église *</Text>
                   <TextInput
@@ -729,7 +683,7 @@ export default function SettingsScreen() {
                 </View>
 
                 <View style={styles.formField}>
-                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Adresse</Text>
+                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Adresse (Optionnel)</Text>
                   <TextInput
                     style={[styles.fieldInput, { borderColor: colors.border, color: colors.text }]}
                     placeholder="Adresse complète"
@@ -739,10 +693,13 @@ export default function SettingsScreen() {
                     multiline
                     numberOfLines={2}
                   />
+                  <Text style={[styles.fieldHelp, { color: colors.textSecondary }]}>
+                    📍 Ce champ n'est pas obligatoire
+                  </Text>
                 </View>
 
                 <View style={styles.formField}>
-                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Téléphone</Text>
+                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Téléphone (Optionnel)</Text>
                   <TextInput
                     style={[
                       styles.fieldInput,
@@ -755,6 +712,9 @@ export default function SettingsScreen() {
                     onChangeText={(text) => setChurchForm(prev => ({ ...prev, phone: text }))}
                     keyboardType="phone-pad"
                   />
+                  <Text style={[styles.fieldHelp, { color: colors.textSecondary }]}>
+                    📞 Ce champ n'est pas obligatoire
+                  </Text>
                   {churchErrors.phone && (
                     <Text style={[styles.fieldError, { color: colors.error }]}>
                       {churchErrors.phone}
@@ -763,31 +723,25 @@ export default function SettingsScreen() {
                 </View>
 
                 <View style={styles.formField}>
-                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Devise</Text>
-                  <View style={styles.currencyButtons}>
-                    {SUPPORTED_CURRENCIES.map((curr) => (
-                      <TouchableOpacity
-                        key={curr.code}
-                        style={[
-                          styles.currencyButton,
-                          { borderColor: colors.border },
-                          churchForm.currency === curr.code && {
-                            backgroundColor: colors.primary,
-                            borderColor: colors.primary
-                          }
-                        ]}
-                        onPress={() => setChurchForm(prev => ({ ...prev, currency: curr.code as any }))}
-                      >
-                        <Text style={[
-                          styles.currencyButtonText,
-                          { color: colors.text },
-                          churchForm.currency === curr.code && { color: 'white' }
-                        ]}>
-                          {curr.name} ({curr.symbol})
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
+                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+                    ⭐ Devise principale
+                  </Text>
+                  <View style={styles.currencyInfoContainer}>
+                    <Text style={[styles.currencyInfoText, { color: colors.text }]}>
+                      La devise principale est définie à l'inscription et ne peut plus être modifiée.
+                    </Text>
+                    <View style={styles.selectedCurrencyBox}>
+                      <Text style={[styles.selectedCurrencyText, { color: colors.primary }]}>
+                        {church.currency} - {
+                          SUPPORTED_CURRENCIES.find(c => c.code === church.currency)?.name || 'Devise principale'
+                        }
+                      </Text>
+                    </View>
                   </View>
+                  
+                  <Text style={[styles.fieldHelp, { color: colors.textSecondary }]}>
+                    💡 Les autres devises (USD, EURO) sont disponibles pour les transactions mais la devise principale reste {church.currency}
+                  </Text>
                 </View>
 
                 <View style={styles.formField}>
@@ -832,7 +786,7 @@ export default function SettingsScreen() {
                       { borderColor: colors.border, color: colors.text },
                       churchErrors.expense_limit && { borderColor: colors.error }
                     ]}
-                    placeholder="1000"
+                    placeholder="10000000000"
                     placeholderTextColor={colors.textSecondary}
                     value={churchForm.expense_limit}
                     onChangeText={(text) => setChurchForm(prev => ({ ...prev, expense_limit: text }))}
@@ -1013,28 +967,28 @@ export default function SettingsScreen() {
                 
                 {publicLinks.map((link) => (
                   <View key={link.id} style={[styles.linkItem, { borderBottomColor: colors.border }]}>
-                  <View style={styles.linkInfo}>
-                    <Text style={[styles.linkTitle, { color: colors.text }]}>
-                    {link.title}
-                    </Text>
-                    <Text style={[styles.linkUrl, { color: colors.primary }]}>
-                    {link.url}
-                    </Text>
-                    {link.description && (
-                    <Text style={[styles.linkDescription, { color: colors.textSecondary }]}>
-                      {link.description}
-                    </Text>
-                    )}
-                    <Text style={[styles.linkPlatform, { color: colors.textSecondary }]}>
-                    📱 {link.platform || 'Autre'}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    style={[styles.deleteLinkButton, { backgroundColor: colors.error }]}
-                    onPress={() => handleDeletePublicLink(link.id)}
-                  >
-                    <Text style={styles.deleteLinkButtonText}>🗑️</Text>
-                  </TouchableOpacity>
+                    <View style={styles.linkInfo}>
+                      <Text style={[styles.linkTitle, { color: colors.text }]}>
+                        {link.title}
+                      </Text>
+                      <Text style={[styles.linkUrl, { color: colors.primary }]}>
+                        {link.url}
+                      </Text>
+                      {link.description && (
+                        <Text style={[styles.linkDescription, { color: colors.textSecondary }]}>
+                          {link.description}
+                        </Text>
+                      )}
+                      <Text style={[styles.linkPlatform, { color: colors.textSecondary }]}>
+                        📱 {link.platform || 'Autre'}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={[styles.deleteLinkButton, { backgroundColor: colors.error }]}
+                      onPress={() => handleDeletePublicLink(link.id)}
+                    >
+                      <Text style={styles.deleteLinkButtonText}>🗑️</Text>
+                    </TouchableOpacity>
                   </View>
                 ))}
                 
@@ -1112,14 +1066,6 @@ export default function SettingsScreen() {
       <SubscriptionManagement
         visible={showSubscriptionManagement}
         onClose={() => setShowSubscriptionManagement(false)}
-      />
-
-      <ImagePickerModal
-        visible={showImagePicker}
-        onClose={() => setShowImagePicker(false)}
-        onImageSelected={handleLogoSelected}
-        type="logo"
-        currentImage={churchForm.logo_url}
       />
     </View>
   );
@@ -1265,12 +1211,6 @@ const styles = StyleSheet.create({
   churchInfo: {
     alignItems: 'center',
   },
-  churchLogo: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    marginBottom: 12,
-  },
   churchName: {
     fontSize: 20,
     fontWeight: 'bold',
@@ -1415,45 +1355,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 16,
   },
-  logoSection: {
-    marginBottom: 20,
-  },
-  logoPreview: {
-    alignItems: 'center',
-  },
-  logoImage: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    marginBottom: 12,
-  },
-  logoChangeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#3498db',
-  },
-  logoChangeText: {
-    fontSize: 14,
-    fontWeight: '500',
-    marginLeft: 6,
-  },
-  logoUploadButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderStyle: 'dashed',
-  },
-  logoUploadText: {
-    fontSize: 14,
-    fontWeight: '500',
-    marginTop: 8,
-  },
   formField: {
     marginBottom: 16,
   },
@@ -1476,6 +1377,29 @@ const styles = StyleSheet.create({
   fieldError: {
     fontSize: 12,
     marginTop: 4,
+  },
+  currencyInfoContainer: {
+    padding: 12,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  currencyInfoText: {
+    fontSize: 14,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  selectedCurrencyBox: {
+    padding: 12,
+    backgroundColor: '#fff3cd',
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#f39c12',
+    alignItems: 'center',
+  },
+  selectedCurrencyText: {
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   currencyButtons: {
     marginTop: 8,
@@ -1601,4 +1525,4 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
   },
-});
+}); 

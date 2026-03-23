@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,9 +17,10 @@ import {
   CreditCard,
   Smartphone,
   DollarSign,
+  Globe,
 } from 'lucide-react-native';
 import { BillCalculator } from './BillCalculator';
-import type { PaymentMethod, BillBreakdown } from '../types/database';
+import type { PaymentMethod, BillBreakdown, Currency } from '../types/database';
 
 interface FinancialReportModalProps {
   visible: boolean;
@@ -30,12 +31,13 @@ interface FinancialReportModalProps {
     category: string;
     recorded_by: string;
     payment_method: PaymentMethod;
+    currency: Currency;
     date: string;
     bills_breakdown?: BillBreakdown[];
     total_calculated?: number;
   }) => Promise<void>;
   title: string;
-  currency: string;
+  currencies: { value: Currency; label: string; symbol: string }[];
   categories: string[];
   initialData?: any;
 }
@@ -45,7 +47,7 @@ export function FinancialReportModal({
   onClose,
   onSubmit,
   title,
-  currency,
+  currencies,
   categories,
   initialData,
 }: FinancialReportModalProps) {
@@ -59,6 +61,7 @@ export function FinancialReportModal({
     category: initialData?.category || categories[0],
     recorded_by: initialData?.recorded_by || '',
     payment_method: (initialData?.payment_method || 'cash') as PaymentMethod,
+    currency: (initialData?.currency || currencies[0]?.value || 'FC') as Currency,
     date: initialData?.date || new Date().toISOString().split('T')[0],
     bills_breakdown: [] as BillBreakdown[],
     total_calculated: 0,
@@ -74,6 +77,22 @@ export function FinancialReportModal({
     { value: 'airtel_money', label: 'Airtel Money', icon: Smartphone },
     { value: 'afrimoney', label: 'Afrimoney', icon: Smartphone },
   ];
+
+  useEffect(() => {
+    if (initialData) {
+      setFormData({
+        amount: initialData.amount || '',
+        description: initialData.description || '',
+        category: initialData.category || categories[0],
+        recorded_by: initialData.recorded_by || '',
+        payment_method: initialData.payment_method || 'cash',
+        currency: initialData.currency || currencies[0]?.value || 'FC',
+        date: initialData.date || new Date().toISOString().split('T')[0],
+        bills_breakdown: initialData.bills_breakdown || [],
+        total_calculated: initialData.total_calculated || 0,
+      });
+    }
+  }, [initialData]);
 
   const handleBillCalculation = (breakdown: BillBreakdown[], total: number) => {
     setFormData((prev) => ({
@@ -103,6 +122,10 @@ export function FinancialReportModal({
       newErrors.recorded_by = 'Le nom est obligatoire';
     }
 
+    if (!formData.currency) {
+      newErrors.currency = 'La devise est obligatoire';
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -125,12 +148,14 @@ export function FinancialReportModal({
         total_calculated: useManualEntry ? undefined : formData.total_calculated,
       });
 
+      // Reset form
       setFormData({
         amount: '',
         description: '',
         category: categories[0],
         recorded_by: '',
         payment_method: 'cash',
+        currency: currencies[0]?.value || 'FC',
         date: new Date().toISOString().split('T')[0],
         bills_breakdown: [],
         total_calculated: 0,
@@ -146,6 +171,11 @@ export function FinancialReportModal({
     }
   };
 
+  const getCurrencySymbol = () => {
+    const currency = currencies.find(c => c.value === formData.currency);
+    return currency?.symbol || formData.currency;
+  };
+
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
       <View style={styles.container}>
@@ -158,6 +188,36 @@ export function FinancialReportModal({
         </View>
 
         <ScrollView style={styles.content} showsVerticalScrollIndicator={true}>
+          {/* Sélection de devise */}
+          <View style={styles.section}>
+            <Text style={styles.fieldLabel}>Devise *</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.categoryButtons}>
+                {currencies.map((currency) => (
+                  <TouchableOpacity
+                    key={currency.value}
+                    style={[
+                      styles.currencyButton,
+                      formData.currency === currency.value && styles.currencyButtonActive,
+                    ]}
+                    onPress={() => setFormData((prev) => ({ ...prev, currency: currency.value }))}
+                  >
+                    <Globe size={16} color={formData.currency === currency.value ? 'white' : '#3498db'} />
+                    <Text
+                      style={[
+                        styles.currencyButtonText,
+                        formData.currency === currency.value && styles.currencyButtonTextActive,
+                      ]}
+                    >
+                      {currency.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </ScrollView>
+            {errors.currency && <Text style={styles.errorText}>{errors.currency}</Text>}
+          </View>
+
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Méthode de saisie</Text>
             <View style={styles.entryMethodButtons}>
@@ -207,10 +267,12 @@ export function FinancialReportModal({
 
           {useManualEntry ? (
             <View style={styles.section}>
-              <Text style={styles.fieldLabel}>Montant ({currency}) *</Text>
+              <Text style={styles.fieldLabel}>
+                Montant ({getCurrencySymbol()}) *
+              </Text>
               <TextInput
                 style={[styles.fieldInput, errors.amount && styles.fieldInputError]}
-                placeholder={`Montant en ${currency}`}
+                placeholder={`Montant en ${getCurrencySymbol()}`}
                 value={formData.amount}
                 onChangeText={(text) => {
                   setFormData((prev) => ({ ...prev, amount: text }));
@@ -223,7 +285,7 @@ export function FinancialReportModal({
           ) : (
             showCalculator && (
               <BillCalculator
-                currency={currency}
+                currency={formData.currency}
                 onCalculationChange={handleBillCalculation}
                 initialBreakdown={formData.bills_breakdown}
               />
@@ -348,7 +410,7 @@ export function FinancialReportModal({
             <View style={styles.summaryCard}>
               <Text style={styles.summaryLabel}>Montant total calculé</Text>
               <Text style={styles.summaryAmount}>
-                {formData.total_calculated.toLocaleString('fr-FR')} {currency}
+                {formData.total_calculated.toLocaleString('fr-FR')} {getCurrencySymbol()}
               </Text>
             </View>
           )}
@@ -465,6 +527,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
   },
+  currencyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#3498db',
+    backgroundColor: 'white',
+    gap: 8,
+  },
+  currencyButtonActive: {
+    backgroundColor: '#3498db',
+    borderColor: '#3498db',
+  },
+  currencyButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#3498db',
+  },
+  currencyButtonTextActive: {
+    color: 'white',
+  },
   categoryButton: {
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -558,4 +643,4 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: 'bold',
   },
-});
+}); 

@@ -220,7 +220,7 @@ export function TreasurerDashboard({ church, onRefresh }: TreasurerDashboardProp
               onPress={() => router.push('/finance')}
             >
               <Plus size={24} color="white" />
-              <Text style={styles.actionText}>Ajouter revenu</Text>
+              <Text style={styles.actionText}>Ajouter Compte Rendu</Text>
             </TouchableOpacity>
 
             <TouchableOpacity

@@ -1,5 +1,5 @@
 import 'react-native-get-random-values';
-import { PostgreSQLService } from './postgresql';
+import { PostgreSQLService } from './postgresql.ts';
 import type { 
   Church, 
   User,
@@ -17,8 +17,13 @@ import type {
   ChurchStats,
   CreateUserData,
   PaymentMethod,
-  Message
-} from '../types/database';
+  Message,
+  MemberDossier,
+  DossierDocument,
+  DossierTransaction,
+  DossierMetrics,
+  CreateMemberData
+} from '../types/database.ts';
 
 // Service de base de données unifié pour My Church
 export class DatabaseService {
@@ -140,9 +145,45 @@ export class DatabaseService {
 
   // ==================== GESTION DES MEMBRES ====================
   
-  static async createMember(memberData: Partial<Member>): Promise<Member> {
+  static async createMember(memberData: Partial<Member> | CreateMemberData): Promise<Member> {
     const isDemo = await this.getCurrentUserDemoStatus();
-    return await PostgreSQLService.createMember(memberData, isDemo);
+    
+    // Si c'est un CreateMemberData, extraire les options de dossier
+    let createDossier = false;
+    let dossierType: 'member' | 'personnel' = 'member';
+    
+    if ('create_dossier' in memberData) {
+      createDossier = memberData.create_dossier || false;
+      dossierType = memberData.dossier_type || (memberData.member_type === 'Personnel' ? 'personnel' : 'member');
+      delete (memberData as any).create_dossier;
+      delete (memberData as any).dossier_type;
+    }
+    
+    const member = await PostgreSQLService.createMember(memberData, isDemo);
+    
+    // Créer un dossier si demandé
+    if (createDossier && member) {
+      try {
+        await this.createMemberDossier({
+          member_id: member.id,
+          church_id: member.church_id,
+          dossier_type: dossierType,
+          dossier_number: `DOS-${Date.now().toString(36).toUpperCase()}`,
+          status: 'incomplet',
+          is_active: true
+        });
+        
+        // Mettre à jour le membre avec l'ID du dossier
+        await this.updateMember(member.id, {
+          has_dossier: true,
+          dossier_status: 'incomplet'
+        });
+      } catch (error) {
+        console.error('❌ Erreur création dossier:', error);
+      }
+    }
+    
+    return member;
   }
 
   static async getMembers(churchId: string): Promise<Member[]> {
@@ -157,12 +198,194 @@ export class DatabaseService {
 
   static async deleteMember(memberId: string): Promise<void> {
     const isDemo = await this.getCurrentUserDemoStatus();
+    
+    // Supprimer le dossier associé si il existe
+    try {
+      const dossier = await this.getMemberDossier(memberId);
+      if (dossier) {
+        await this.deleteDossier(dossier.id);
+      }
+    } catch (error) {
+      console.error('❌ Erreur suppression dossier:', error);
+    }
+    
     return await PostgreSQLService.deleteMember(memberId, isDemo);
   }
 
   static async regenerateMemberQR(memberId: string): Promise<string> {
     const isDemo = await this.getCurrentUserDemoStatus();
     return await PostgreSQLService.regenerateMemberQR(memberId, isDemo);
+  }
+
+  // ==================== GESTION DES DOSSIERS ====================
+  
+  static async createMemberDossier(dossierData: Partial<MemberDossier>): Promise<MemberDossier> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    
+    const dossier = await PostgreSQLService.createMemberDossier(dossierData, isDemo);
+    
+    // Journaliser la création
+    await this.createAuditLogEntry({
+      church_id: dossier.church_id,
+      user_id: (await this.getCurrentUser())?.id || 'system',
+      action: 'CREATE_DOSSIER',
+      resource_type: 'Dossier',
+      resource_id: dossier.id,
+      details: {
+        member_id: dossier.member_id,
+        dossier_type: dossier.dossier_type,
+        dossier_number: dossier.dossier_number
+      }
+    });
+    
+    // Créer une transaction de dossier
+    await this.createDossierTransaction({
+      dossier_id: dossier.id,
+      member_id: dossier.member_id,
+      transaction_type: 'status_change',
+      description: 'Dossier créé',
+      created_by: (await this.getCurrentUser())?.id || 'system'
+    });
+    
+    return dossier;
+  }
+
+  static async getMemberDossier(memberId: string): Promise<MemberDossier | null> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    return await PostgreSQLService.getMemberDossier(memberId, isDemo);
+  }
+
+  static async getDossier(dossierId: string): Promise<MemberDossier | null> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    return await PostgreSQLService.getDossier(dossierId, isDemo);
+  }
+
+  static async getChurchDossiers(churchId: string): Promise<MemberDossier[]> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    return await PostgreSQLService.getChurchDossiers(churchId, isDemo);
+  }
+
+  static async updateDossier(dossierId: string, updates: Partial<MemberDossier>): Promise<MemberDossier> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    
+    const dossier = await PostgreSQLService.updateDossier(dossierId, updates, isDemo);
+    
+    // Journaliser la modification
+    await this.createAuditLogEntry({
+      church_id: dossier.church_id,
+      user_id: (await this.getCurrentUser())?.id || 'system',
+      action: 'UPDATE_DOSSIER',
+      resource_type: 'Dossier',
+      resource_id: dossier.id,
+      details: updates
+    });
+    
+    return dossier;
+  }
+
+  static async deleteDossier(dossierId: string): Promise<void> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    
+    // Récupérer le dossier avant suppression pour journalisation
+    const dossier = await this.getDossier(dossierId);
+    
+    await PostgreSQLService.deleteDossier(dossierId, isDemo);
+    
+    // Journaliser la suppression
+    if (dossier) {
+      await this.createAuditLogEntry({
+        church_id: dossier.church_id,
+        user_id: (await this.getCurrentUser())?.id || 'system',
+        action: 'DELETE_DOSSIER',
+        resource_type: 'Dossier',
+        resource_id: dossierId,
+        details: {
+          member_id: dossier.member_id,
+          dossier_number: dossier.dossier_number
+        }
+      });
+    }
+  }
+
+  static async addDocumentToDossier(documentData: Partial<DossierDocument>): Promise<DossierDocument> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    
+    const document = await PostgreSQLService.addDocumentToDossier(documentData, isDemo);
+    
+    // Mettre à jour le statut du dossier
+    const dossier = await this.getDossier(document.dossier_id);
+    if (dossier && dossier.status === 'incomplet') {
+      await this.updateDossierStatus(document.dossier_id, 'en_revision');
+    }
+    
+    // Journaliser l'ajout
+    await this.createAuditLogEntry({
+      church_id: dossier?.church_id || '',
+      user_id: (await this.getCurrentUser())?.id || 'system',
+      action: 'ADD_DOCUMENT',
+      resource_type: 'Document',
+      resource_id: document.id,
+      details: {
+        dossier_id: document.dossier_id,
+        document_type: document.document_type,
+        title: document.title
+      }
+    });
+    
+    // Créer une transaction de dossier
+    await this.createDossierTransaction({
+      dossier_id: document.dossier_id,
+      member_id: dossier?.member_id || '',
+      transaction_type: 'document_upload',
+      description: `Document ajouté: ${document.title}`,
+      created_by: (await this.getCurrentUser())?.id || 'system'
+    });
+    
+    return document;
+  }
+
+  static async updateDossierStatus(dossierId: string, status: MemberDossier['status']): Promise<MemberDossier> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    
+    const dossier = await PostgreSQLService.updateDossierStatus(dossierId, status, isDemo);
+    
+    // Mettre à jour le statut du membre
+    if (dossier) {
+      await this.updateMember(dossier.member_id, {
+        dossier_status: status
+      });
+    }
+    
+    // Créer une transaction de dossier
+    await this.createDossierTransaction({
+      dossier_id: dossierId,
+      member_id: dossier.member_id,
+      transaction_type: 'status_change',
+      description: `Statut changé en: ${status}`,
+      created_by: (await this.getCurrentUser())?.id || 'system'
+    });
+    
+    return dossier;
+  }
+
+  static async createDossierTransaction(transactionData: Partial<DossierTransaction>): Promise<DossierTransaction> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    return await PostgreSQLService.createDossierTransaction(transactionData, isDemo);
+  }
+
+  static async getDossierTransactions(dossierId: string): Promise<DossierTransaction[]> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    return await PostgreSQLService.getDossierTransactions(dossierId, isDemo);
+  }
+
+  static async getDossierMetrics(churchId: string): Promise<DossierMetrics> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    return await PostgreSQLService.getDossierMetrics(churchId, isDemo);
+  }
+
+  static async exportDossier(dossierId: string, format: 'pdf' | 'zip' = 'pdf'): Promise<string> {
+    const isDemo = await this.getCurrentUserDemoStatus();
+    return await PostgreSQLService.exportDossier(dossierId, format, isDemo);
   }
 
   // ==================== GESTION FINANCIÈRE ====================
@@ -372,4 +595,4 @@ export class DatabaseService {
     const isDemo = await this.getCurrentUserDemoStatus();
     return await PostgreSQLService.markMessageAsRead(messageId, isDemo);
   }
-}
+} 

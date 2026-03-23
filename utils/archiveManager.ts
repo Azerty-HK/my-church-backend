@@ -134,52 +134,7 @@ export class ArchiveManager {
     }
   }
 
-  static shouldCreateMonthlyArchive(): boolean {
-    const today = new Date();
-    return today.getDate() === 1 && today.getHours() === 0; // Premier jour du mois à minuit
-  }
-
-  static shouldCreateYearlyArchive(): boolean {
-    const today = new Date();
-    return today.getMonth() === 0 && today.getDate() === 1 && today.getHours() === 0; // 1er janvier à minuit
-  }
-
-  static async autoArchive(churchId: string): Promise<void> {
-    try {
-      const today = new Date();
-      
-      if (this.shouldCreateYearlyArchive()) {
-        console.log('📅 Création archive annuelle automatique');
-        const lastYear = today.getFullYear() - 1;
-        await this.createYearlyArchive(churchId, lastYear);
-        
-        // Notification automatique
-        await DatabaseService.createNotification({
-          church_id: churchId,
-          title: '📁 Archive annuelle créée',
-          message: `L'archive automatique de l'année ${lastYear} a été générée avec succès.`,
-          type: 'info'
-        });
-      } else if (this.shouldCreateMonthlyArchive()) {
-        console.log('📅 Création archive mensuelle automatique');
-        const lastMonth = today.getMonth() === 0 ? 12 : today.getMonth();
-        const year = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
-        await this.createMonthlyArchive(churchId, year, lastMonth);
-        
-        // Notification automatique
-        const monthNames = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
-          'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
-        await DatabaseService.createNotification({
-          church_id: churchId,
-          title: '📁 Archive mensuelle créée',
-          message: `L'archive automatique de ${monthNames[lastMonth - 1]} ${year} a été générée avec succès.`,
-          type: 'info'
-        });
-      }
-    } catch (error) {
-      console.error('💥 Erreur autoArchive:', error);
-    }
-  }
+// Auto-archive has been moved directly to ArchiveScheduler.ts to prevent duplicate execution
 
   static getArchivePeriodName(archive: Archive): string {
     if (archive.archive_type === 'yearly') {

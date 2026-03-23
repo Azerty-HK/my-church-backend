@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,8 @@ import {
   ScrollView,
   TextInput,
   useWindowDimensions,
+  Platform,
+  Image,
 } from 'react-native';
 import { 
   DollarSign, 
@@ -17,7 +19,6 @@ import {
   X, 
   Check, 
   Smartphone, 
-  QrCode, 
   Shield, 
   Lock, 
   Folder,
@@ -28,13 +29,23 @@ import {
   Briefcase,
   Users as UsersIcon,
   Camera,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Building,
+  Download,
+  Share2,
+  Printer,
+  AlertCircle
 } from 'lucide-react-native';
 import { Picker } from '@react-native-picker/picker';
 import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as Print from 'expo-print';
+import { captureRef } from 'react-native-view-shot';
 
 interface PaymentData {
-  method: 'mobile' | 'card' | 'digital_wallet';
+  method: 'Mobile Money' | 'Carte Bancaire';
   reference: string;
   timestamp: string;
   note: string;
@@ -61,85 +72,23 @@ interface MemberData {
   has_dossier?: boolean;
   registration_date: string;
   is_active: boolean;
+  church_id: string;
+  has_paid?: boolean;
+  card_number?: string;
+  payment_method?: string;
+  payment_date?: string;
+  payment_amount?: number;
+  payment_currency?: string;
 }
 
 interface MemberRegistrationWithPaymentProps {
   visible: boolean;
   onClose: () => void;
-  onComplete: (memberData: MemberData) => void;
+  onComplete: (memberData: MemberData, paymentData?: PaymentData, departmentName?: string) => void;
   churchId: string;
   defaultCurrency: 'FC' | 'USD' | 'EURO';
+  churchName?: string;
 }
-
-// Simulation d'API de paiement
-const PaymentAPI = {
-  checkServiceAvailability: async (method: 'mobile' | 'card' | 'digital_wallet', provider?: string): Promise<boolean> => {
-    await new Promise(resolve => setTimeout(resolve, 800));
-    return Math.random() > 0.1;
-  },
-
-  checkUserBalance: async (amount: number, currency: string): Promise<{ success: boolean; balance?: number; message?: string }> => {
-    await new Promise(resolve => setTimeout(resolve, 1200));
-    
-    const balances: Record<string, number> = {
-      'FC': 50000,
-      'USD': 50,
-      'EURO': 45
-    };
-
-    const userBalance = balances[currency] || 0;
-    const hasSufficientFunds = userBalance >= amount;
-
-    return {
-      success: hasSufficientFunds,
-      balance: userBalance,
-      message: hasSufficientFunds 
-        ? undefined 
-        : `Solde insuffisant. Votre solde: ${userBalance.toLocaleString()} ${currency}, Montant requis: ${amount.toLocaleString()} ${currency}`
-    };
-  },
-
-  processPayment: async (paymentDetails: {
-    amount: number;
-    currency: string;
-    method: 'mobile' | 'card' | 'digital_wallet';
-    provider?: string;
-    phoneNumber?: string;
-    cardNumber?: string;
-    cardHolder?: string;
-    expiryDate?: string;
-    cvv?: string;
-  }): Promise<{ success: boolean; reference: string; message?: string; transactionId?: string }> => {
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    const success = Math.random() > 0.15;
-    
-    if (success) {
-      const timestamp = Date.now();
-      const randomId = Math.random().toString(36).substr(2, 9).toUpperCase();
-      
-      return {
-        success: true,
-        reference: `PAY-${timestamp}-${randomId}`,
-        transactionId: `TX${timestamp}${randomId}`,
-      };
-    } else {
-      const errors = [
-        'Échec du paiement. Veuillez réessayer.',
-        'Service temporairement indisponible.',
-        'Transaction refusée par la banque.',
-        'Délai d\'attente dépassé.',
-        'Problème de connexion au serveur de paiement.'
-      ];
-      
-      return {
-        success: false,
-        reference: '',
-        message: errors[Math.floor(Math.random() * errors.length)]
-      };
-    }
-  }
-};
 
 export function MemberRegistrationWithPayment({
   visible,
@@ -147,9 +96,11 @@ export function MemberRegistrationWithPayment({
   onComplete,
   churchId,
   defaultCurrency,
+  churchName = 'Église',
 }: MemberRegistrationWithPaymentProps) {
   const [step, setStep] = useState<'form' | 'payment' | 'processing' | 'success'>('form');
   const [processing, setProcessing] = useState(false);
+  const [paymentCompleted, setPaymentCompleted] = useState(false);
   
   // Informations du membre
   const [memberInfo, setMemberInfo] = useState({
@@ -166,56 +117,41 @@ export function MemberRegistrationWithPayment({
     photoBase64: null as string | null,
   });
 
-  // Paiement
-  const [paymentMethod, setPaymentMethod] = useState<'mobile' | 'card' | 'digital_wallet'>('mobile');
-  const [selectedProvider, setSelectedProvider] = useState<string>('');
+  // Paiement - SUPPRESSION de 'Cash'
+  const [paymentMethod, setPaymentMethod] = useState<'Mobile Money' | 'Carte Bancaire'>('Mobile Money');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [cardNumber, setCardNumber] = useState('');
   const [cardHolder, setCardHolder] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
   const [cvv, setCvv] = useState('');
   const [transactionDetails, setTransactionDetails] = useState<any>(null);
+  const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
+  const [generatedCardNumber, setGeneratedCardNumber] = useState('');
+  const [selectedDepartment, setSelectedDepartment] = useState('');
 
   const { height: SCREEN_HEIGHT } = useWindowDimensions();
+  const cardViewRef = useRef<View>(null);
+  const invoiceViewRef = useRef<View>(null);
 
-  // Montant
+  // Montant fixe en 5 USD
   const [currency] = useState<'FC' | 'USD' | 'EURO'>(defaultCurrency);
-  const [amount, setAmount] = useState(currency === 'FC' ? 5000 : currency === 'USD' ? 5 : 5);
-  const currencySymbol = currency === 'FC' ? 'FC' : currency === 'USD' ? '$' : '€';
+  const [amount] = useState(5); // TOUJOURS 5 USD
+  const currencySymbol = '$'; // TOUJOURS USD
   const formattedAmount = amount.toLocaleString();
-
-  const mobileProviders = [
-    { id: 'mpesa', name: 'M-Pesa', icon: '📱', color: '#2ecc71' },
-    { id: 'orange', name: 'Orange Money', icon: '🟠', color: '#ff6600' },
-    { id: 'airtel', name: 'Airtel Money', icon: '🔴', color: '#e30613' },
-    { id: 'vodacom', name: 'Vodacom MPesa', icon: '🔵', color: '#0077b5' },
-  ];
-
-  const cardProviders = [
-    { id: 'visa', name: 'Visa', icon: '💳', color: '#1a1f71' },
-    { id: 'mastercard', name: 'Mastercard', icon: '💳', color: '#eb001b' },
-    { id: 'amex', name: 'American Express', icon: '💳', color: '#2e77bc' },
-  ];
-
-  const digitalWalletProviders = [
-    { id: 'google_pay', name: 'Google Pay', icon: '📱', color: '#4285f4' },
-    { id: 'apple_pay', name: 'Apple Pay', icon: '🍎', color: '#000000' },
-    { id: 'samsung_pay', name: 'Samsung Pay', icon: '📱', color: '#1428a0' },
-    { id: 'paypal', name: 'PayPal', icon: '🔵', color: '#003087' },
-  ];
 
   const positions = [
     'Membre Actif', 'Ancien', 'Diacre', 'Pasteur', 'Secrétaire', 
-    'Trésorier', 'Musicien', 'Choriste', 'Enseignant', 'Évangéliste'
+    'Trésorier', 'Lecteur', 'Choriste', 'Administrateur', 'Évangéliste'
   ];
 
   const departments = [
-    'Adoration', 'Enseignement', 'Évangélisation', 'Finance', 
-    'Média', 'Musique', 'Jeunesse', 'Femmes', 'Hommes', 'Enfants'
+    'Chorale', 'Ecodim', 'Évangélisation', 'Sécurité', 'Protocole',
+    'Presse et Technique', 'Nettoyage', 'Jeunesse', 'Femmes', 'Hommes', 'Intercession',
   ];
 
   const resetForm = () => {
     setProcessing(false);
+    setPaymentCompleted(false);
     setStep('form');
     setMemberInfo({
       first_name: '',
@@ -230,14 +166,16 @@ export function MemberRegistrationWithPayment({
       photoUri: null,
       photoBase64: null,
     });
-    setPaymentMethod('mobile');
-    setSelectedProvider('');
+    setPaymentMethod('Mobile Money');
     setPhoneNumber('');
     setCardNumber('');
     setCardHolder('');
     setExpiryDate('');
     setCvv('');
     setTransactionDetails(null);
+    setPaymentData(null);
+    setGeneratedCardNumber('');
+    setSelectedDepartment('');
   };
 
   const handleClose = () => {
@@ -304,15 +242,20 @@ export function MemberRegistrationWithPayment({
       Alert.alert('Erreur', 'Veuillez entrer un email valide');
       return false;
     }
+    if (!selectedDepartment) {
+      Alert.alert('Erreur', 'Veuillez sélectionner un département');
+      return false;
+    }
     return true;
   };
 
   const validatePaymentDetails = (): boolean => {
-    if (paymentMethod === 'mobile') {
-      if (!selectedProvider) {
-        Alert.alert('Sélection requise', 'Veuillez sélectionner un opérateur mobile');
-        return false;
-      }
+    if (!selectedDepartment) {
+      Alert.alert('Département requis', 'Veuillez sélectionner un département');
+      return false;
+    }
+
+    if (paymentMethod === 'Mobile Money') {
       if (!phoneNumber.trim()) {
         Alert.alert('Numéro requis', 'Veuillez entrer un numéro de téléphone');
         return false;
@@ -322,11 +265,7 @@ export function MemberRegistrationWithPayment({
         Alert.alert('Numéro invalide', 'Veuillez entrer un numéro de téléphone valide');
         return false;
       }
-    } else if (paymentMethod === 'card') {
-      if (!selectedProvider) {
-        Alert.alert('Sélection requise', 'Veuillez sélectionner un type de carte');
-        return false;
-      }
+    } else if (paymentMethod === 'Carte Bancaire') {
       const cleanCardNumber = cardNumber.replace(/\s/g, '');
       if (!cleanCardNumber || cleanCardNumber.length < 16) {
         Alert.alert('Numéro de carte invalide', 'Veuillez entrer un numéro de carte valide (16 chiffres)');
@@ -344,13 +283,465 @@ export function MemberRegistrationWithPayment({
         Alert.alert('CVV invalide', 'Veuillez entrer un code CVV valide (3 ou 4 chiffres)');
         return false;
       }
-    } else if (paymentMethod === 'digital_wallet') {
-      if (!selectedProvider) {
-        Alert.alert('Sélection requise', 'Veuillez sélectionner un portefeuille numérique');
-        return false;
-      }
     }
     return true;
+  };
+
+  const generateCardNumber = (): string => {
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const random = Math.random().toString(36).substr(2, 4).toUpperCase();
+    return `MC-${timestamp}-${random}`;
+  };
+
+  const generateQRCode = (memberId: string): string => {
+    return `QR-${memberId}-${Date.now().toString(36).toUpperCase()}`;
+  };
+
+  const captureCardAsImage = async (): Promise<string> => {
+    try {
+      if (!cardViewRef.current) {
+        throw new Error('La carte n\'est pas encore générée');
+      }
+
+      const uri = await captureRef(cardViewRef.current, {
+        format: 'png',
+        quality: 1,
+        result: 'tmpfile',
+      });
+
+      return uri;
+    } catch (error) {
+      console.error('Erreur capture carte:', error);
+      throw error;
+    }
+  };
+
+  const generateInvoiceImage = async (): Promise<string> => {
+    try {
+      // Créer une vue de facture pour la capture
+      const html = generateInvoiceHTML();
+      const { uri } = await Print.printToFileAsync({
+        html,
+        base64: false
+      });
+
+      // Pour une vraie image, nous créerons un PNG à partir du PDF
+      // Pour l'instant, nous retournons l'URI du PDF
+      // Note: Dans une vraie implémentation, vous voudriez convertir le PDF en image
+      return uri;
+    } catch (error) {
+      console.error('Erreur génération facture image:', error);
+      throw error;
+    }
+  };
+
+  const saveImageToGallery = async (imageUri: string, fileName: string, type: 'card' | 'invoice'): Promise<boolean> => {
+    try {
+      // Demander les permissions
+      if (Platform.OS !== 'web') {
+        const { status } = await MediaLibrary.requestPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission requise', `Veuillez autoriser l'accès à la galerie pour sauvegarder ${type === 'card' ? 'la carte' : 'la facture'}.`);
+          return false;
+        }
+      }
+
+      // Créer un nom de fichier unique avec timestamp
+      const timestamp = Date.now();
+      const fileExtension = imageUri.toLowerCase().endsWith('.pdf') ? 'pdf' : 'png';
+      const finalFileName = `${fileName}-${timestamp}.${fileExtension}`;
+      
+      // Déterminer le dossier de destination
+      const albumName = 'MyChurch';
+      const directory = Platform.select({
+        ios: `${FileSystem.documentDirectory}`,
+        android: `${FileSystem.documentDirectory}`,
+        default: `${FileSystem.documentDirectory}`,
+      });
+
+      const newPath = `${directory}${finalFileName}`;
+
+      // Copier le fichier vers le nouvel emplacement
+      await FileSystem.copyAsync({
+        from: imageUri,
+        to: newPath,
+      });
+
+      // Sauvegarder dans la galerie
+      if (Platform.OS !== 'web') {
+        const asset = await MediaLibrary.createAssetAsync(newPath);
+        const album = await MediaLibrary.getAlbumAsync(albumName);
+        
+        if (album === null) {
+          await MediaLibrary.createAlbumAsync(albumName, asset, false);
+        } else {
+          await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+        }
+      }
+
+      // Indexer le fichier pour qu'il apparaisse dans la galerie
+      if (Platform.OS === 'android') {
+        // Pour Android, s'assurer que le fichier est indexé
+        const contentUri = await FileSystem.getContentUriAsync(newPath);
+        if (contentUri) {
+          console.log('Fichier indexé avec succès:', contentUri);
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.error(`Erreur sauvegarde ${type}:`, error);
+      throw error;
+    }
+  };
+
+  const saveCardToGallery = async (): Promise<boolean> => {
+    try {
+      const cardImageUri = await captureCardAsImage();
+      const saved = await saveImageToGallery(
+        cardImageUri, 
+        `Carte-Membre-${memberInfo.first_name}-${memberInfo.last_name}`,
+        'card'
+      );
+
+      if (saved) {
+        Alert.alert('✅ Succès', 'La carte a été enregistrée dans votre galerie');
+      }
+      return saved;
+    } catch (error) {
+      console.error('Erreur sauvegarde carte galerie:', error);
+      Alert.alert('Erreur', 'Impossible de sauvegarder la carte dans la galerie');
+      return false;
+    }
+  };
+
+  const saveInvoiceToGallery = async (): Promise<boolean> => {
+    try {
+      const invoiceImageUri = await generateInvoiceImage();
+      const saved = await saveImageToGallery(
+        invoiceImageUri, 
+        `Facture-${transactionDetails?.reference || 'invoice'}`,
+        'invoice'
+      );
+
+      if (saved) {
+        Alert.alert('✅ Succès', 'La facture a été enregistrée dans votre galerie');
+      }
+      return saved;
+    } catch (error) {
+      console.error('Erreur sauvegarde facture galerie:', error);
+      Alert.alert('Erreur', 'Impossible de sauvegarder la facture dans la galerie');
+      return false;
+    }
+  };
+
+  const shareImage = async (imageUri: string, title: string) => {
+    try {
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(imageUri, {
+          mimeType: imageUri.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png',
+          dialogTitle: title,
+          UTI: imageUri.toLowerCase().endsWith('.pdf') ? 'com.adobe.pdf' : 'public.image'
+        });
+      } else {
+        Alert.alert('Erreur', 'Le partage n\'est pas disponible sur cet appareil');
+      }
+    } catch (error) {
+      console.error('Erreur partage:', error);
+      Alert.alert('Erreur', 'Impossible de partager le fichier');
+    }
+  };
+
+  const generateInvoiceHTML = (): string => {
+    if (!transactionDetails) {
+      return '<html><body><h1>Facture non disponible</h1></body></html>';
+    }
+
+    const formattedDate = new Date(transactionDetails.timestamp).toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Facture - MyChurch</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 30px;
+            color: #333;
+            background-color: white;
+          }
+          .invoice-container {
+            max-width: 800px;
+            margin: 0 auto;
+            border: 2px solid #3498db;
+            border-radius: 15px;
+            padding: 30px;
+            background-color: #fff;
+          }
+          .invoice-header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #3498db;
+          }
+          .app-name {
+            color: #3498db;
+            font-size: 32px;
+            font-weight: bold;
+            margin-bottom: 10px;
+          }
+          .invoice-title {
+            font-size: 20px;
+            color: #2c3e50;
+            font-weight: bold;
+            margin-bottom: 10px;
+          }
+          .invoice-details {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+          }
+          .detail-section {
+            flex: 1;
+            min-width: 250px;
+            margin-bottom: 20px;
+          }
+          .detail-label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            font-weight: bold;
+          }
+          .detail-value {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #2c3e50;
+          }
+          .payment-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            overflow: hidden;
+          }
+          .payment-table th {
+            background-color: #3498db;
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: bold;
+          }
+          .payment-table td {
+            padding: 15px;
+            border-bottom: 1px solid #dee2e6;
+            color: #2c3e50;
+          }
+          .total-row {
+            font-weight: bold;
+            background-color: #f8f9fa;
+          }
+          .total-amount {
+            color: #27ae60;
+            font-size: 20px;
+          }
+          .payment-info {
+            background-color: #f8f9fa;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            border-left: 5px solid #27ae60;
+          }
+          .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 2px solid #ecf0f1;
+            color: #666;
+            font-size: 14px;
+          }
+          .status-badge {
+            display: inline-block;
+            padding: 8px 15px;
+            background-color: #27ae60;
+            color: white;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 14px;
+          }
+          .church-info {
+            background-color: #e3f2fd;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: bold;
+            color: #1976d2;
+          }
+          @media print {
+            body {
+              padding: 0;
+            }
+            .invoice-container {
+              border: none;
+              padding: 0;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="invoice-container">
+          <div class="invoice-header">
+            <div class="app-name">MyChurch</div>
+            <div class="invoice-title">FACTURE DE PAIEMENT</div>
+            <div>Carte de membre numérique</div>
+          </div>
+          
+          <div class="church-info">
+            ${churchName}
+          </div>
+          
+          <div class="invoice-details">
+            <div class="detail-section">
+              <div class="detail-label">Informations du membre</div>
+              <div class="detail-value">${memberInfo.first_name} ${memberInfo.last_name}</div>
+              
+              <div class="detail-label">Email</div>
+              <div class="detail-value">${memberInfo.email}</div>
+              
+              <div class="detail-label">Téléphone</div>
+              <div class="detail-value">${memberInfo.phone || 'Non spécifié'}</div>
+              
+              <div class="detail-label">Type de membre</div>
+              <div class="detail-value">${memberInfo.member_type}</div>
+              
+              <div class="detail-label">Poste</div>
+              <div class="detail-value">${memberInfo.position || 'Non spécifié'}</div>
+            </div>
+            
+            <div class="detail-section">
+              <div class="detail-label">Référence facture</div>
+              <div class="detail-value">${transactionDetails.reference}</div>
+              
+              <div class="detail-label">Date et heure</div>
+              <div class="detail-value">${formattedDate}</div>
+              
+              <div class="detail-label">Statut</div>
+              <div class="detail-value">
+                <span class="status-badge">PAYÉ</span>
+              </div>
+              
+              <div class="detail-label">Numéro de carte</div>
+              <div class="detail-value">${generatedCardNumber}</div>
+              
+              <div class="detail-label">Département</div>
+              <div class="detail-value">${selectedDepartment}</div>
+            </div>
+          </div>
+          
+          <table class="payment-table">
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th>Quantité</th>
+                <th>Prix unitaire</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Carte de ${memberInfo.member_type === 'Membre' ? 'membre' : 'personnel'} numérique</td>
+                <td>1</td>
+                <td>${transactionDetails.amount} ${transactionDetails.currency}</td>
+                <td>${transactionDetails.amount} ${transactionDetails.currency}</td>
+              </tr>
+              <tr class="total-row">
+                <td colspan="3" style="text-align: right; padding-right: 20px;">TOTAL</td>
+                <td class="total-amount">${transactionDetails.amount} ${transactionDetails.currency}</td>
+              </tr>
+            </tbody>
+          </table>
+          
+          <div class="payment-info">
+            <div class="detail-label">Moyen de paiement</div>
+            <div class="detail-value">${transactionDetails.method}</div>
+            
+            ${transactionDetails.phoneNumber ? `
+              <div class="detail-label">Numéro de téléphone</div>
+              <div class="detail-value">${transactionDetails.phoneNumber}</div>
+            ` : ''}
+            
+            <div class="detail-label">Département assigné</div>
+            <div class="detail-value">${selectedDepartment}</div>
+            
+            <div class="detail-label">ID Transaction</div>
+            <div class="detail-value">${transactionDetails.transactionId}</div>
+            
+            <div class="detail-label">Note</div>
+            <div class="detail-value">Paiement inscription carte membre - Département: ${selectedDepartment}</div>
+          </div>
+          
+          <div class="footer">
+            <p><strong>${churchName}</strong></p>
+            <p>Cette facture a été générée automatiquement par MyChurch</p>
+            <p><em>Merci pour votre confiance !</em></p>
+            <p style="font-size: 12px; margin-top: 10px;">Date d'émission: ${formattedDate}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+  };
+
+  const generateAndDownloadInvoice = async () => {
+    try {
+      // Générer et sauvegarder l'image de la facture
+      const saved = await saveInvoiceToGallery();
+      
+      if (saved) {
+        // Optionnel: aussi générer un PDF
+        const html = generateInvoiceHTML();
+        const { uri } = await Print.printToFileAsync({
+          html,
+          base64: false
+        });
+
+        const pdfName = `facture-${transactionDetails?.reference || 'invoice'}.pdf`;
+        const newPath = `${FileSystem.documentDirectory}${pdfName}`;
+        
+        await FileSystem.moveAsync({
+          from: uri,
+          to: newPath
+        });
+
+        // Partager le PDF si l'utilisateur le souhaite
+        if (Platform.OS === 'ios' || (await Sharing.isAvailableAsync())) {
+          await Sharing.shareAsync(newPath, {
+            dialogTitle: 'Partager la facture PDF',
+          });
+        }
+
+        return newPath;
+      }
+      return null;
+    } catch (error) {
+      console.error('Erreur génération facture:', error);
+      Alert.alert('Erreur', 'Impossible de générer la facture');
+      return null;
+    }
   };
 
   const handleProcessPayment = async () => {
@@ -362,94 +753,78 @@ export function MemberRegistrationWithPayment({
     setStep('processing');
 
     try {
-      const serviceAvailable = await PaymentAPI.checkServiceAvailability(paymentMethod, selectedProvider);
-      
-      if (!serviceAvailable) {
-        Alert.alert('Service indisponible', 'Le service de paiement est temporairement indisponible. Veuillez réessayer plus tard ou choisir une autre méthode.');
-        setProcessing(false);
-        setStep('payment');
-        return;
-      }
+      await new Promise(resolve => setTimeout(resolve, 2000));
 
-      const balanceCheck = await PaymentAPI.checkUserBalance(amount, currency);
+      const timestamp = Date.now();
+      const randomId = Math.random().toString(36).substr(2, 9).toUpperCase();
+      const cardNumber = generateCardNumber();
       
-      if (!balanceCheck.success) {
-        Alert.alert('Solde insuffisant', balanceCheck.message || 'Votre solde est insuffisant pour effectuer ce paiement.');
-        setProcessing(false);
-        setStep('payment');
-        return;
-      }
-
-      const paymentResult = await PaymentAPI.processPayment({
-        amount,
-        currency,
+      const transactionData = {
+        reference: `PAY-${timestamp}-${randomId}`,
+        transactionId: `TX${timestamp}${randomId}`,
+        timestamp: new Date().toISOString(),
         method: paymentMethod,
-        provider: selectedProvider,
-        phoneNumber: paymentMethod === 'mobile' ? phoneNumber : undefined,
-        cardNumber: paymentMethod === 'card' ? cardNumber.replace(/\s/g, '') : undefined,
-        cardHolder: paymentMethod === 'card' ? cardHolder : undefined,
-        expiryDate: paymentMethod === 'card' ? expiryDate : undefined,
-        cvv: paymentMethod === 'card' ? cvv : undefined,
-      });
+        amount: 5,
+        currency: 'USD',
+        cardNumber,
+        department: selectedDepartment,
+        phoneNumber: paymentMethod === 'Mobile Money' ? phoneNumber : undefined,
+      };
 
-      if (paymentResult.success) {
-        setTransactionDetails({
-          reference: paymentResult.reference,
-          transactionId: paymentResult.transactionId,
-          timestamp: new Date().toISOString(),
-          method: paymentMethod,
-          provider: selectedProvider,
-          amount,
-          currency,
-        });
+      setTransactionDetails(transactionData);
+      setGeneratedCardNumber(cardNumber);
 
-        // Préparer les données du membre
-        const memberData: MemberData = {
-          first_name: memberInfo.first_name.trim(),
-          last_name: memberInfo.last_name.trim(),
-          email: memberInfo.email.trim().toLowerCase(),
-          phone: memberInfo.phone.trim() || undefined,
-          address: memberInfo.address.trim() || undefined,
-          member_type: memberInfo.member_type,
-          position: memberInfo.position || undefined,
-          departments: memberInfo.departments,
-          salary: memberInfo.salary || undefined,
-          photo_url: memberInfo.photoBase64 ? `data:image/jpeg;base64,${memberInfo.photoBase64}` : undefined,
-          qr_code: `CH-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
-          has_dossier: true,
-          registration_date: new Date().toISOString(),
-          is_active: true,
-        };
+      // Créer les données de paiement
+      const paymentData: PaymentData = {
+        method: paymentMethod,
+        reference: transactionData.reference,
+        timestamp: transactionData.timestamp,
+        note: `Paiement inscription carte membre - 5 USD - Département: ${selectedDepartment}`,
+        phoneNumber: paymentMethod === 'Mobile Money' ? phoneNumber : undefined,
+        cardNumber: paymentMethod === 'Carte Bancaire' ? cardNumber.replace(/\s/g, '').slice(-4) : undefined,
+        cardHolder: paymentMethod === 'Carte Bancaire' ? cardHolder : undefined,
+        expiryDate: paymentMethod === 'Carte Bancaire' ? expiryDate : undefined,
+        cvv: paymentMethod === 'Carte Bancaire' ? cvv : undefined,
+      };
 
-        setStep('success');
-        
-        setTimeout(() => {
-          onComplete(memberData);
-          resetForm();
-        }, 3000);
-        
-      } else {
-        Alert.alert(
-          '❌ Paiement échoué',
-          paymentResult.message || 'Une erreur est survenue lors du paiement. Veuillez réessayer.',
-          [
-            {
-              text: 'Réessayer',
-              onPress: () => {
-                setProcessing(false);
-                setStep('payment');
-              },
-            },
-            {
-              text: 'Changer de méthode',
-              onPress: () => {
-                setProcessing(false);
-                setStep('payment');
-              },
-            },
-          ]
-        );
-      }
+      setPaymentData(paymentData);
+      setPaymentCompleted(true);
+
+      // Générer ID membre
+      const memberId = `MEM-${Date.now().toString(36).toUpperCase()}`;
+      const qrCode = generateQRCode(memberId);
+
+      // Préparer les données du membre avec paiement
+      const memberData: MemberData = {
+        first_name: memberInfo.first_name.trim(),
+        last_name: memberInfo.last_name.trim(),
+        email: memberInfo.email.trim().toLowerCase(),
+        phone: memberInfo.phone.trim() || undefined,
+        address: memberInfo.address.trim() || undefined,
+        member_type: memberInfo.member_type,
+        position: memberInfo.position || undefined,
+        departments: [selectedDepartment],
+        salary: memberInfo.salary || undefined,
+        photo_url: memberInfo.photoBase64 ? `data:image/jpeg;base64,${memberInfo.photoBase64}` : undefined,
+        qr_code: qrCode,
+        has_dossier: true,
+        registration_date: new Date().toISOString(),
+        is_active: true,
+        church_id: churchId,
+        has_paid: true,
+        card_number: cardNumber,
+        payment_method: paymentMethod,
+        payment_date: new Date().toISOString(),
+        payment_amount: 5,
+        payment_currency: 'USD',
+      };
+
+      setStep('success');
+      
+      setTimeout(() => {
+        onComplete(memberData, paymentData, selectedDepartment);
+      }, 3000);
+      
     } catch (error: any) {
       console.error('Erreur paiement:', error);
       Alert.alert(
@@ -534,37 +909,113 @@ export function MemberRegistrationWithPayment({
     }));
   };
 
-  const toggleDepartment = (department: string) => {
-    setMemberInfo(prev => ({
-      ...prev,
-      departments: prev.departments.includes(department)
-        ? prev.departments.filter(d => d !== department)
-        : [...prev.departments, department]
-    }));
-  };
+  const renderCard = () => (
+    <View ref={cardViewRef} style={styles.cardContainer}>
+      <View style={styles.card}>
+        {/* En-tête de la carte */}
+        <View style={styles.cardHeader}>
+          <Text style={styles.cardHeaderTitle}>MyChurch</Text>
+          <Text style={styles.cardHeaderSubtitle}>
+            {memberInfo.member_type === 'Membre' ? 'CARTE DE MEMBRE' : 'CARTE DE PERSONNEL'}
+          </Text>
+        </View>
+        
+        {/* Corps de la carte */}
+        <View style={styles.cardBody}>
+          {/* Photo */}
+          <View style={styles.cardPhotoContainer}>
+            {memberInfo.photoUri ? (
+              <Image 
+                source={{ uri: memberInfo.photoUri }} 
+                style={styles.cardPhoto}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.cardPhotoPlaceholder}>
+                <User size={40} color="#666" />
+              </View>
+            )}
+          </View>
+          
+          {/* Informations */}
+          <View style={styles.cardInfo}>
+            <Text style={styles.cardName}>
+              {memberInfo.first_name} {memberInfo.last_name}
+            </Text>
+            
+            {memberInfo.member_type === 'Personnel' && memberInfo.position && (
+              <Text style={styles.cardPosition}>{memberInfo.position}</Text>
+            )}
+            
+            {selectedDepartment && (
+              <Text style={styles.cardDepartment}>
+                📂 {selectedDepartment}
+              </Text>
+            )}
+            
+            <View style={styles.cardDetails}>
+              {memberInfo.phone && (
+                <View style={styles.cardDetailRow}>
+                  <Phone size={12} color="#666" />
+                  <Text style={styles.cardDetailText}>{memberInfo.phone}</Text>
+                </View>
+              )}
+              
+              {memberInfo.email && (
+                <View style={styles.cardDetailRow}>
+                  <Mail size={12} color="#666" />
+                  <Text style={styles.cardDetailText}>{memberInfo.email}</Text>
+                </View>
+              )}
+              
+              {memberInfo.address && (
+                <View style={styles.cardDetailRow}>
+                  <MapPin size={12} color="#666" />
+                  <Text style={styles.cardDetailText}>{memberInfo.address}</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        </View>
+        
+        {/* Pied de carte */}
+        <View style={styles.cardFooter}>
+          <View style={styles.cardNumberContainer}>
+            <CreditCard size={12} color="#3498db" />
+            <Text style={styles.cardNumber}>{generatedCardNumber}</Text>
+          </View>
+          <Text style={styles.cardChurch}>{churchName}</Text>
+        </View>
+      </View>
+    </View>
+  );
 
   const renderForm = () => (
     <ScrollView style={styles.formContainer}>
       <Text style={styles.formTitle}>📝 Formulaire d'inscription</Text>
       <Text style={styles.formSubtitle}>Complétez les informations du membre</Text>
 
+      {/* Église */}
+      <View style={[styles.section, styles.churchInfo]}>
+        <Building size={24} color="#3498db" />
+        <Text style={styles.churchName}>{churchName}</Text>
+      </View>
+
       {/* Photo */}
-      <View style={styles.photoSection}>
+      <View style={styles.section}>
         <Text style={styles.sectionLabel}>Photo du membre (optionnel)</Text>
         <View style={styles.photoContainer}>
           {memberInfo.photoUri ? (
             <View style={styles.photoPreviewContainer}>
-              <View style={styles.photoPreview}>
-                <Image 
-                  source={{ uri: memberInfo.photoUri }}
-                  style={styles.photoImage}
-                />
-              </View>
+              <Image 
+                source={{ uri: memberInfo.photoUri }}
+                style={styles.photoImage}
+              />
               <TouchableOpacity 
                 style={styles.removePhotoButton}
                 onPress={removePhoto}
               >
-                <X size={16} color="white" />
+                <Text style={styles.removePhotoText}>×</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -734,27 +1185,48 @@ export function MemberRegistrationWithPayment({
         )}
       </View>
 
-      {/* Départements */}
+      {/* Département */}
       <View style={styles.section}>
-        <Text style={styles.sectionLabel}>Départements</Text>
-        <View style={styles.departmentsContainer}>
-          {departments.map((department) => (
-            <TouchableOpacity
-              key={department}
-              style={[
-                styles.departmentChip,
-                memberInfo.departments.includes(department) && styles.departmentChipActive
-              ]}
-              onPress={() => toggleDepartment(department)}
-            >
-              <Text style={[
-                styles.departmentChipText,
-                memberInfo.departments.includes(department) && styles.departmentChipTextActive
-              ]}>
-                {department}
-              </Text>
-            </TouchableOpacity>
-          ))}
+        <Text style={styles.sectionLabel}>Département *</Text>
+        <Text style={styles.inputHelp}>
+          La carte sera automatiquement enregistrée dans le dossier de ce département
+        </Text>
+        
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.departmentsScroll}>
+          <View style={styles.departmentsContainer}>
+            {departments.map((department) => (
+              <TouchableOpacity
+                key={department}
+                style={[
+                  styles.departmentChip,
+                  selectedDepartment === department && styles.departmentChipActive
+                ]}
+                onPress={() => setSelectedDepartment(department)}
+              >
+                <Text style={[
+                  styles.departmentChipText,
+                  selectedDepartment === department && styles.departmentChipTextActive
+                ]}>
+                  {department}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
+        
+        {!selectedDepartment && (
+          <Text style={styles.errorText}>
+            ⚠️ Veuillez sélectionner un département si pas déjà fait.
+          </Text>
+        )}
+        
+        <View style={styles.infoBox}>
+          <Text style={styles.infoBoxTitle}>📂 Information importante</Text>
+          <Text style={styles.infoBoxText}>
+            • Le département sera automatiquement créé si c'est le premier paiement{'\n'}
+            • La carte sera enregistrée dans le dossier "{selectedDepartment || 'département sélectionné'}"{'\n'}
+            • Vous pourrez modifier le département plus tard
+          </Text>
         </View>
       </View>
 
@@ -765,62 +1237,86 @@ export function MemberRegistrationWithPayment({
           <View style={styles.amountDetails}>
             <Text style={styles.amountLabel}>Montant de l'inscription</Text>
             <Text style={styles.amountValue}>
-              {formattedAmount} {currencySymbol}
+              5 USD
             </Text>
           </View>
         </View>
         
         <Text style={styles.paymentNote}>
-          Ce montant inclus: Carte de membre, QR Code, Dossier numérique, et frais d'inscription.
+          Ce montant inclus: Carte de membre, QR Code, Dossier numérique dans "{selectedDepartment || 'le département'}", et frais d'inscription.
+        </Text>
+        
+        <Text style={styles.importantRule}>
+          ⚠️ IMPORTANT: La carte est générée uniquement après paiement de 5 USD
+        </Text>
+        
+        <Text style={styles.departmentRule}>
+          📂 La carte sera automatiquement enregistrée dans le dossier du département "{selectedDepartment || 'sélectionné'}"
         </Text>
       </View>
 
-      <TouchableOpacity
-        style={styles.nextButton}
-        onPress={() => {
-          if (validateForm()) {
-            setStep('payment');
-          }
-        }}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.nextButtonText}>Continuer vers le paiement</Text>
-      </TouchableOpacity>
+      <View style={styles.buttonGroupForm}>
+        <TouchableOpacity
+          style={[styles.nextButton, !selectedDepartment && styles.nextButtonDisabled]}
+          onPress={() => {
+            if (validateForm()) {
+              setStep('payment');
+            }
+          }}
+          disabled={!selectedDepartment}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.nextButtonText}>Continuer vers le paiement</Text>
+        </TouchableOpacity>
+      </View>
     </ScrollView>
   );
 
   const renderPayment = () => (
     <View style={styles.stepContainer}>
-      <Text style={styles.stepTitle}>💳 Paiement de l'inscription</Text>
-      <Text style={styles.stepSubtitle}>Choisissez votre méthode de paiement</Text>
+      <Text style={styles.stepTitle}>💳 Paiement de la carte - 5 USD</Text>
+      <Text style={styles.stepSubtitle}>Indiquez comment le paiement a été effectué</Text>
+
+      {selectedDepartment && (
+        <View style={styles.departmentBadge}>
+          <Text style={styles.departmentBadgeText}>
+            📂 Département: {selectedDepartment}
+          </Text>
+          <Text style={styles.departmentBadgeSubtext}>
+            La carte sera enregistrée dans ce département
+          </Text>
+        </View>
+      )}
+
+      <View style={styles.paymentAmountInfo}>
+        <DollarSign size={40} color="#27ae60" />
+        <View style={styles.paymentAmountDetails}>
+          <Text style={styles.paymentAmountText}>Montant: 5 USD</Text>
+          <Text style={styles.paymentDepartmentText}>
+            Département: {selectedDepartment}
+          </Text>
+        </View>
+      </View>
 
       <TouchableOpacity
         style={[
           styles.methodButton,
-          paymentMethod === 'mobile' && styles.methodButtonActive,
+          paymentMethod === 'Mobile Money' && styles.methodButtonActive,
         ]}
-        onPress={() => {
-          setPaymentMethod('mobile');
-          setSelectedProvider('');
-        }}
+        onPress={() => setPaymentMethod('Mobile Money')}
         activeOpacity={0.7}
       >
         <View style={styles.methodContent}>
-          <View style={[styles.methodIconContainer, { backgroundColor: paymentMethod === 'mobile' ? '#e8f5e9' : '#e3f2fd' }]}>
-            <Smartphone size={24} color={paymentMethod === 'mobile' ? '#27ae60' : '#3498db'} />
+          <View style={[styles.methodIconContainer, { backgroundColor: paymentMethod === 'Mobile Money' ? '#e8f5e9' : '#e3f2fd' }]}>
+            <Smartphone size={24} color={paymentMethod === 'Mobile Money' ? '#27ae60' : '#3498db'} />
           </View>
           <View style={styles.methodInfo}>
             <Text style={styles.methodTitle}>Mobile Money</Text>
             <Text style={styles.methodDesc}>
-              Paiement rapide et sécurisé via votre mobile
+              Paiement effectué via mobile money
             </Text>
-            <View style={styles.providerTags}>
-              {mobileProviders.slice(0, 3).map(p => (
-                <Text key={p.id} style={styles.providerTag}>{p.icon} {p.name}</Text>
-              ))}
-            </View>
           </View>
-          {paymentMethod === 'mobile' && (
+          {paymentMethod === 'Mobile Money' && (
             <View style={styles.selectedIndicator}>
               <Check size={20} color="#27ae60" />
             </View>
@@ -831,60 +1327,20 @@ export function MemberRegistrationWithPayment({
       <TouchableOpacity
         style={[
           styles.methodButton,
-          paymentMethod === 'card' && styles.methodButtonActive,
+          paymentMethod === 'Carte Bancaire' && styles.methodButtonActive,
         ]}
-        onPress={() => {
-          setPaymentMethod('card');
-          setSelectedProvider('');
-        }}
+        onPress={() => setPaymentMethod('Carte Bancaire')}
         activeOpacity={0.7}
       >
         <View style={styles.methodContent}>
-          <View style={[styles.methodIconContainer, { backgroundColor: paymentMethod === 'card' ? '#f3e8f5' : '#f3e5f5' }]}>
+          <View style={[styles.methodIconContainer, { backgroundColor: paymentMethod === 'Carte Bancaire' ? '#f3e8f5' : '#f3e5f5' }]}>
             <CreditCard size={24} color="#9b59b6" />
           </View>
           <View style={styles.methodInfo}>
             <Text style={styles.methodTitle}>Carte bancaire</Text>
-            <Text style={styles.methodDesc}>Paiement sécurisé par carte Visa/Mastercard</Text>
-            <View style={styles.providerTags}>
-              {cardProviders.map(p => (
-                <Text key={p.id} style={styles.providerTag}>{p.icon} {p.name}</Text>
-              ))}
-            </View>
+            <Text style={styles.methodDesc}>Paiement par carte Visa/Mastercard</Text>
           </View>
-          {paymentMethod === 'card' && (
-            <View style={styles.selectedIndicator}>
-              <Check size={20} color="#27ae60" />
-            </View>
-          )}
-        </View>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={[
-          styles.methodButton,
-          paymentMethod === 'digital_wallet' && styles.methodButtonActive,
-        ]}
-        onPress={() => {
-          setPaymentMethod('digital_wallet');
-          setSelectedProvider('');
-        }}
-        activeOpacity={0.7}
-      >
-        <View style={styles.methodContent}>
-          <View style={[styles.methodIconContainer, { backgroundColor: '#fdeaea' }]}>
-            <QrCode size={24} color="#e74c3c" />
-          </View>
-          <View style={styles.methodInfo}>
-            <Text style={styles.methodTitle}>Portefeuille numérique</Text>
-            <Text style={styles.methodDesc}>Google Pay, Apple Pay, PayPal</Text>
-            <View style={styles.providerTags}>
-              {digitalWalletProviders.slice(0, 2).map(p => (
-                <Text key={p.id} style={styles.providerTag}>{p.icon} {p.name}</Text>
-              ))}
-            </View>
-          </View>
-          {paymentMethod === 'digital_wallet' && (
+          {paymentMethod === 'Carte Bancaire' && (
             <View style={styles.selectedIndicator}>
               <Check size={20} color="#27ae60" />
             </View>
@@ -893,32 +1349,9 @@ export function MemberRegistrationWithPayment({
       </TouchableOpacity>
 
       {/* Détails du paiement selon la méthode */}
-      {paymentMethod === 'mobile' && (
+      {paymentMethod === 'Mobile Money' && (
         <>
-          <Text style={styles.sectionLabel}>Sélectionnez votre opérateur</Text>
-          <View style={styles.providersContainer}>
-            {mobileProviders.map((provider) => (
-              <TouchableOpacity
-                key={provider.id}
-                style={[
-                  styles.providerButton,
-                  selectedProvider === provider.id && styles.providerButtonActive,
-                ]}
-                onPress={() => setSelectedProvider(provider.id)}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.providerIcon, { fontSize: 24 }]}>{provider.icon}</Text>
-                <Text style={[
-                  styles.providerText,
-                  selectedProvider === provider.id && styles.providerTextActive,
-                ]}>
-                  {provider.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <Text style={styles.sectionLabel}>Votre numéro de téléphone</Text>
+          <Text style={styles.sectionLabel}>Numéro de téléphone utilisé *</Text>
           <TextInput
             style={styles.input}
             placeholder="+243 XX XXX XXX"
@@ -928,35 +1361,15 @@ export function MemberRegistrationWithPayment({
             autoComplete="tel"
             placeholderTextColor="#95a5a6"
           />
+          <Text style={styles.inputHelp}>
+            Entrez le numéro utilisé pour le paiement
+          </Text>
         </>
       )}
 
-      {paymentMethod === 'card' && (
+      {paymentMethod === 'Carte Bancaire' && (
         <>
-          <Text style={styles.sectionLabel}>Type de carte acceptée</Text>
-          <View style={styles.providersContainer}>
-            {cardProviders.map((provider) => (
-              <TouchableOpacity
-                key={provider.id}
-                style={[
-                  styles.providerButton,
-                  selectedProvider === provider.id && styles.providerButtonActive,
-                ]}
-                onPress={() => setSelectedProvider(provider.id)}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.providerIcon, { fontSize: 24 }]}>{provider.icon}</Text>
-                <Text style={[
-                  styles.providerText,
-                  selectedProvider === provider.id && styles.providerTextActive,
-                ]}>
-                  {provider.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <Text style={styles.sectionLabel}>Numéro de carte</Text>
+          <Text style={styles.sectionLabel}>Numéro de carte *</Text>
           <TextInput
             style={styles.input}
             placeholder="1234 5678 9012 3456"
@@ -967,7 +1380,7 @@ export function MemberRegistrationWithPayment({
             placeholderTextColor="#95a5a6"
           />
 
-          <Text style={styles.sectionLabel}>Nom du titulaire</Text>
+          <Text style={styles.sectionLabel}>Nom du titulaire *</Text>
           <TextInput
             style={styles.input}
             placeholder="JOHN DOE"
@@ -979,7 +1392,7 @@ export function MemberRegistrationWithPayment({
 
           <View style={styles.rowInputs}>
             <View style={styles.halfInput}>
-              <Text style={styles.sectionLabel}>Date d'expiration</Text>
+              <Text style={styles.sectionLabel}>Date d'expiration *</Text>
               <TextInput
                 style={styles.input}
                 placeholder="MM/AA"
@@ -991,7 +1404,7 @@ export function MemberRegistrationWithPayment({
               />
             </View>
             <View style={styles.halfInput}>
-              <Text style={styles.sectionLabel}>Code de sécurité (CVV)</Text>
+              <Text style={styles.sectionLabel}>Code de sécurité (CVV) *</Text>
               <TextInput
                 style={styles.input}
                 placeholder="123"
@@ -1007,37 +1420,11 @@ export function MemberRegistrationWithPayment({
         </>
       )}
 
-      {paymentMethod === 'digital_wallet' && (
-        <>
-          <Text style={styles.sectionLabel}>Choisissez votre portefeuille</Text>
-          <View style={styles.providersContainer}>
-            {digitalWalletProviders.map((provider) => (
-              <TouchableOpacity
-                key={provider.id}
-                style={[
-                  styles.providerButton,
-                  selectedProvider === provider.id && styles.providerButtonActive,
-                ]}
-                onPress={() => setSelectedProvider(provider.id)}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.providerIcon, { fontSize: 24 }]}>{provider.icon}</Text>
-                <Text style={[
-                  styles.providerText,
-                  selectedProvider === provider.id && styles.providerTextActive,
-                ]}>
-                  {provider.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </>
-      )}
-
-      <View style={styles.packageInfo}>
-        <Folder size={20} color="#9b59b6" />
-        <Text style={styles.packageText}>
-          ✅ Ce paiement inclut: Carte de membre + QR Code + Dossier numérique
+      <View style={styles.paymentWarning}>
+        <AlertCircle size={20} color="#e74c3c" />
+        <Text style={styles.paymentWarningText}>
+          ⚠️ IMPORTANT: Ce système enregistre uniquement le paiement effectué en dehors de l'application.
+          Aucun transfert d'argent n'a lieu dans l'application. Montant fixe: 5 USD.
         </Text>
       </View>
 
@@ -1060,9 +1447,9 @@ export function MemberRegistrationWithPayment({
             <ActivityIndicator size="small" color="white" />
           ) : (
             <>
-              <DollarSign size={20} color="white" />
+              <Check size={20} color="white" />
               <Text style={styles.payButtonText}>
-                Payer {formattedAmount} {currencySymbol}
+                Confirmer le paiement (5 USD)
               </Text>
             </>
           )}
@@ -1072,7 +1459,7 @@ export function MemberRegistrationWithPayment({
       <View style={styles.securityInfo}>
         <Lock size={14} color="#27ae60" />
         <Text style={styles.securityText}>
-          Toutes les transactions sont cryptées et sécurisées
+          Cette interface enregistre uniquement le paiement effectué en dehors de l'application
         </Text>
       </View>
     </View>
@@ -1081,30 +1468,47 @@ export function MemberRegistrationWithPayment({
   const renderProcessing = () => (
     <View style={styles.processingContainer}>
       <ActivityIndicator size="large" color="#3498db" />
-      <Text style={styles.processingTitle}>Traitement en cours</Text>
+      <Text style={styles.processingTitle}>Enregistrement en cours</Text>
       <Text style={styles.processingText}>
-        Veuillez patienter pendant que nous traitons votre paiement et créons le dossier...
+        Veuillez patienter pendant que nous enregistrons le paiement et créons le dossier...
       </Text>
       
       <View style={styles.processingSteps}>
         <View style={styles.processingStep}>
           <View style={[styles.stepDot, styles.stepDotActive]} />
-          <Text style={styles.stepText}>Validation des informations</Text>
+          <Text style={styles.stepText}>Validation du département</Text>
         </View>
         <View style={styles.processingStep}>
           <View style={[styles.stepDot, styles.stepDotActive]} />
-          <Text style={styles.stepText}>Traitement du paiement</Text>
+          <Text style={styles.stepText}>Enregistrement du paiement</Text>
         </View>
         <View style={styles.processingStep}>
           <View style={[styles.stepDot, processing && styles.stepDotActive]} />
-          <Text style={styles.stepText}>Création du dossier</Text>
+          <Text style={styles.stepText}>Création de la carte</Text>
+        </View>
+        <View style={styles.processingStep}>
+          <View style={[styles.stepDot, processing && styles.stepDotActive]} />
+          <Text style={styles.stepText}>Enregistrement dans "{selectedDepartment}"</Text>
         </View>
       </View>
       
       <View style={styles.packageProcessing}>
         <Folder size={40} color="#3498db" />
-        <Text style={styles.packageProcessingText}>
-          Génération de la carte, QR Code et dossier numérique en cours...
+        <View style={styles.packageProcessingInfo}>
+          <Text style={styles.packageProcessingText}>
+            Génération de la carte et enregistrement dans le département
+          </Text>
+          <Text style={styles.packageProcessingDepartment}>
+            📂 {selectedDepartment}
+          </Text>
+        </View>
+      </View>
+      
+      <View style={styles.paymentWarning}>
+        <AlertCircle size={20} color="#e74c3c" />
+        <Text style={styles.paymentWarningText}>
+          ⚠️ Ce système enregistre uniquement le paiement effectué en dehors de l'application.
+          Aucun transfert d'argent n'a lieu dans l'application.
         </Text>
       </View>
       
@@ -1115,63 +1519,126 @@ export function MemberRegistrationWithPayment({
   );
 
   const renderSuccess = () => (
-    <View style={styles.successContainer}>
-      <View style={styles.successIcon}>
-        <Check size={60} color="white" />
+    <ScrollView style={styles.successContainer}>
+      <View style={styles.successHeader}>
+        <View style={styles.successIcon}>
+          <Check size={60} color="white" />
+        </View>
+        <Text style={styles.successTitle}>✅ Inscription Réussie !</Text>
+        
+        <View style={styles.memberInfoSuccess}>
+          <User size={20} color="#27ae60" />
+          <Text style={styles.memberNameSuccess}>
+            {memberInfo.first_name} {memberInfo.last_name}
+          </Text>
+        </View>
+        
+        {selectedDepartment && (
+          <View style={styles.departmentSuccess}>
+            <Folder size={16} color="#3498db" />
+            <Text style={styles.departmentSuccessText}>
+              Département: {selectedDepartment}
+            </Text>
+          </View>
+        )}
       </View>
-      <Text style={styles.successTitle}>✅ Inscription Réussie !</Text>
       
       {transactionDetails && (
         <View style={styles.transactionDetails}>
           <View style={styles.transactionRow}>
-            <Text style={styles.transactionLabel}>Membre:</Text>
+            <Text style={styles.transactionLabel}>Type:</Text>
             <Text style={styles.transactionValue}>
-              {memberInfo.first_name} {memberInfo.last_name}
+              {memberInfo.member_type}
             </Text>
+          </View>
+          <View style={styles.transactionRow}>
+            <Text style={styles.transactionLabel}>Département:</Text>
+            <Text style={styles.transactionValue}>{selectedDepartment}</Text>
           </View>
           <View style={styles.transactionRow}>
             <Text style={styles.transactionLabel}>Référence:</Text>
             <Text style={styles.transactionValue}>{transactionDetails.reference}</Text>
           </View>
           <View style={styles.transactionRow}>
+            <Text style={styles.transactionLabel}>Numéro de carte:</Text>
+            <Text style={styles.transactionValue}>{generatedCardNumber}</Text>
+          </View>
+          <View style={styles.transactionRow}>
             <Text style={styles.transactionLabel}>Montant:</Text>
             <Text style={styles.transactionValue}>
-              {transactionDetails.amount.toLocaleString()} {transactionDetails.currency}
+              {transactionDetails.amount} {transactionDetails.currency}
             </Text>
           </View>
           <View style={styles.transactionRow}>
             <Text style={styles.transactionLabel}>Méthode:</Text>
             <Text style={styles.transactionValue}>
-              {transactionDetails.method === 'mobile' ? 'Mobile Money' : 
-               transactionDetails.method === 'card' ? 'Carte Bancaire' : 
-               'Portefeuille Numérique'}
+              {transactionDetails.method}
             </Text>
           </View>
         </View>
       )}
       
-      <View style={styles.successFeatures}>
-        <View style={styles.featureItem}>
-          <QrCode size={24} color="#27ae60" />
-          <Text style={styles.featureText}>Carte avec QR Code générée</Text>
-        </View>
-        <View style={styles.featureItem}>
-          <Folder size={24} color="#9b59b6" />
-          <Text style={styles.featureText}>Dossier numérique créé</Text>
-        </View>
-        <View style={styles.featureItem}>
-          <Check size={24} color="#3498db" />
-          <Text style={styles.featureText}>Paiement confirmé</Text>
-        </View>
+      {/* Affichage de la carte */}
+      <View style={styles.cardPreviewSection}>
+        <Text style={styles.cardPreviewTitle}>Votre carte de membre</Text>
+        {renderCard()}
+        
+        <Text style={styles.cardPreviewNote}>
+          📂 Cette carte a été automatiquement enregistrée dans le dossier "{selectedDepartment}"
+        </Text>
+      </View>
+      
+      <View style={styles.successActions}>
+        <TouchableOpacity
+          style={[styles.successButton, styles.downloadButton]}
+          onPress={async () => {
+            try {
+              await saveCardToGallery();
+            } catch (error) {
+              Alert.alert('Erreur', 'Impossible de télécharger la carte');
+            }
+          }}
+        >
+          <Download size={20} color="white" />
+          <Text style={styles.successButtonText}>Télécharger la carte (Image)</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity
+          style={[styles.successButton, styles.shareButton]}
+          onPress={async () => {
+            try {
+              const cardImageUri = await captureCardAsImage();
+              await shareImage(cardImageUri, 'Partager la carte de membre');
+            } catch (error) {
+              Alert.alert('Erreur', 'Impossible de partager la carte');
+            }
+          }}
+        >
+          <Share2 size={20} color="white" />
+          <Text style={styles.successButtonText}>Partager la carte</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity
+          style={[styles.successButton, styles.invoiceButton]}
+          onPress={async () => {
+            await generateAndDownloadInvoice();
+          }}
+        >
+          <Printer size={20} color="white" />
+          <Text style={styles.successButtonText}>Télécharger la facture</Text>
+        </TouchableOpacity>
       </View>
       
       <Text style={styles.successMessage}>
         L'inscription de {memberInfo.first_name} {memberInfo.last_name} a été traitée avec succès.
-        Redirection en cours...
+        La carte a été enregistrée dans le département "{selectedDepartment}".
       </Text>
       
       <ActivityIndicator size="small" color="#27ae60" style={styles.successSpinner} />
-    </View>
+      <Text style={styles.successClosing}>
+        Fermeture automatique dans 3 secondes...
+      </Text>
+    </ScrollView>
   );
 
   return (
@@ -1193,7 +1660,7 @@ export function MemberRegistrationWithPayment({
               </Text>
               <Text style={styles.subtitle}>
                 {step === 'form' ? 'Complétez toutes les informations' : 
-                 step === 'payment' ? 'Sélectionnez votre méthode de paiement' : 
+                 step === 'payment' ? 'Indiquez comment le paiement a été effectué' : 
                  step === 'processing' ? 'Veuillez patienter...' : 'Inscription réussie !'}
               </Text>
             </View>
@@ -1215,7 +1682,14 @@ export function MemberRegistrationWithPayment({
           >
             <View style={styles.infoCard}>
               <View style={styles.infoCardHeader}>
-                <User size={32} color="#27ae60" />
+                {memberInfo.photoUri ? (
+                  <Image 
+                    source={{ uri: memberInfo.photoUri }}
+                    style={styles.memberPhoto}
+                  />
+                ) : (
+                  <User size={32} color="#27ae60" />
+                )}
                 <Text style={styles.memberName}>
                   {memberInfo.first_name || memberInfo.last_name 
                     ? `${memberInfo.first_name} ${memberInfo.last_name}`.trim()
@@ -1223,12 +1697,12 @@ export function MemberRegistrationWithPayment({
                 </Text>
               </View>
               <View style={styles.amountContainer}>
-                <Text style={styles.amountLabel}>Montant total à payer</Text>
+                <Text style={styles.amountLabel}>Montant du paiement</Text>
                 <Text style={styles.amount}>
-                  {formattedAmount} {currencySymbol}
+                  5 USD
                 </Text>
                 <Text style={styles.amountNote}>
-                  Frais d'inscription complet
+                  {selectedDepartment ? `Département: ${selectedDepartment}` : 'Sélectionnez un département'}
                 </Text>
               </View>
             </View>
@@ -1242,11 +1716,11 @@ export function MemberRegistrationWithPayment({
               <View style={styles.securityBadge}>
                 <Shield size={14} color="#27ae60" />
                 <Text style={styles.securityBadgeText}>
-                  🔒 Paiement 100% sécurisé
+                  ⚠️ Paiement externe à l'application
                 </Text>
               </View>
               <Text style={styles.footerText}>
-                Aucune donnée bancaire n'est stockée sur nos serveurs
+                Ce système enregistre uniquement les paiements effectués en dehors de l'application
               </Text>
             </View>
           </ScrollView>
@@ -1322,6 +1796,11 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     gap: 12,
   },
+  memberPhoto: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+  },
   memberName: {
     fontSize: 18,
     fontWeight: 'bold',
@@ -1368,17 +1847,30 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     lineHeight: 20,
   },
+  churchInfo: {
+    backgroundColor: '#e3f2fd',
+    padding: 16,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#bbdefb',
+  },
+  churchName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1976d2',
+    flex: 1,
+  },
   section: {
     backgroundColor: '#f8f9fa',
     borderRadius: 16,
     padding: 20,
     marginBottom: 16,
-  },
-  photoSection: {
-    backgroundColor: '#f8f9fa',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
   },
   sectionLabel: {
     fontSize: 15,
@@ -1390,34 +1882,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   photoPreviewContainer: {
-    position: 'relative',
     marginBottom: 16,
+    position: 'relative',
   },
-  photoPreview: {
+  photoImage: {
     width: 120,
     height: 120,
     borderRadius: 60,
     backgroundColor: '#e0e0e0',
-    overflow: 'hidden',
     borderWidth: 4,
     borderColor: '#3498db',
-  },
-  photoImage: {
-    width: '100%',
-    height: '100%',
   },
   removePhotoButton: {
     position: 'absolute',
     top: -8,
     right: -8,
     backgroundColor: '#e74c3c',
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: 'white',
+  },
+  removePhotoText: {
+    color: 'white',
+    fontSize: 18,
+    fontWeight: 'bold',
   },
   photoPlaceholder: {
     width: 120,
@@ -1498,6 +1988,18 @@ const styles = StyleSheet.create({
   inputWithIconPadding: {
     paddingLeft: 46,
   },
+  inputHelp: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    marginBottom: 12,
+    lineHeight: 18,
+  },
+  errorText: {
+    fontSize: 12,
+    color: '#e74c3c',
+    marginTop: 8,
+    marginBottom: 12,
+  },
   typeButtons: {
     flexDirection: 'row',
     gap: 12,
@@ -1536,10 +2038,13 @@ const styles = StyleSheet.create({
   picker: {
     height: 56,
   },
+  departmentsScroll: {
+    marginBottom: 12,
+  },
   departmentsContainer: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 8,
+    paddingBottom: 8,
   },
   departmentChip: {
     paddingHorizontal: 16,
@@ -1560,6 +2065,25 @@ const styles = StyleSheet.create({
   },
   departmentChipTextActive: {
     color: 'white',
+  },
+  infoBox: {
+    backgroundColor: '#f3e5f5',
+    padding: 16,
+    borderRadius: 12,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#e1bee7',
+  },
+  infoBoxTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#7b1fa2',
+    marginBottom: 8,
+  },
+  infoBoxText: {
+    fontSize: 13,
+    color: '#4a148c',
+    lineHeight: 18,
   },
   paymentInfo: {
     backgroundColor: '#e8f5e9',
@@ -1589,14 +2113,44 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#27ae60',
     lineHeight: 18,
+    marginBottom: 8,
+  },
+  importantRule: {
+    fontSize: 13,
+    color: '#e74c3c',
+    fontWeight: '600',
+    textAlign: 'center',
+    padding: 12,
+    backgroundColor: '#fdeaea',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#f5c6cb',
+    marginBottom: 8,
+  },
+  departmentRule: {
+    fontSize: 13,
+    color: '#3498db',
+    fontWeight: '600',
+    textAlign: 'center',
+    padding: 12,
+    backgroundColor: '#e3f2fd',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#bbdefb',
+  },
+  buttonGroupForm: {
+    gap: 12,
+    marginTop: 20,
+    marginBottom: 20,
   },
   nextButton: {
     backgroundColor: '#3498db',
     paddingVertical: 18,
     borderRadius: 12,
     alignItems: 'center',
-    marginTop: 20,
-    marginBottom: 20,
+  },
+  nextButtonDisabled: {
+    backgroundColor: '#bdc3c7',
   },
   nextButtonText: {
     fontSize: 16,
@@ -1622,6 +2176,25 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 24,
     lineHeight: 20,
+  },
+  departmentBadge: {
+    backgroundColor: '#e3f2fd',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 20,
+    borderWidth: 2,
+    borderColor: '#3498db',
+    alignItems: 'center',
+  },
+  departmentBadgeText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#1976d2',
+    marginBottom: 4,
+  },
+  departmentBadgeSubtext: {
+    fontSize: 12,
+    color: '#1976d2',
   },
   methodButton: {
     borderWidth: 2,
@@ -1662,19 +2235,6 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     lineHeight: 18,
   },
-  providerTags: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  providerTag: {
-    fontSize: 11,
-    color: '#7f8c8d',
-    backgroundColor: '#f8f9fa',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
   selectedIndicator: {
     width: 30,
     height: 30,
@@ -1685,65 +2245,55 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#27ae60',
   },
-  providersContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginHorizontal: -6,
-    marginBottom: 8,
-  },
-  providerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderWidth: 2,
-    borderColor: '#dee2e6',
-    borderRadius: 12,
-    backgroundColor: 'white',
-    margin: 6,
-    flex: 1,
-    minWidth: '45%',
-    justifyContent: 'center',
-  },
-  providerButtonActive: {
-    backgroundColor: '#f8f9fa',
-    borderWidth: 3,
-    borderColor: '#3498db',
-  },
-  providerIcon: {
-    marginRight: 8,
-  },
-  providerText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#2c3e50',
-  },
-  providerTextActive: {
-    fontWeight: '700',
-    color: '#3498db',
-  },
   rowInputs: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 16,
   },
-  packageInfo: {
+  halfInput: {
+    flex: 1,
+  },
+  paymentAmountInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f3e5f5',
+    backgroundColor: '#e8f5e9',
+    padding: 20,
+    borderRadius: 12,
+    marginTop: 20,
+    marginBottom: 20,
+    gap: 16,
+    borderWidth: 2,
+    borderColor: '#27ae60',
+  },
+  paymentAmountDetails: {
+    flex: 1,
+  },
+  paymentAmountText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#27ae60',
+    marginBottom: 4,
+  },
+  paymentDepartmentText: {
+    fontSize: 14,
+    color: '#27ae60',
+  },
+  paymentWarning: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#fdeaea',
     padding: 16,
     borderRadius: 12,
     marginTop: 16,
     marginBottom: 20,
     gap: 12,
     borderWidth: 1,
-    borderColor: '#9b59b6',
+    borderColor: '#e74c3c',
   },
-  packageText: {
+  paymentWarningText: {
     flex: 1,
     fontSize: 13,
-    color: '#9b59b6',
-    fontWeight: '600',
+    color: '#e74c3c',
     lineHeight: 18,
   },
   buttonGroup: {
@@ -1829,7 +2379,7 @@ const styles = StyleSheet.create({
   processingStep: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 16,
     gap: 12,
   },
   stepDot: {
@@ -1859,11 +2409,18 @@ const styles = StyleSheet.create({
     gap: 15,
     width: '100%',
   },
-  packageProcessingText: {
+  packageProcessingInfo: {
     flex: 1,
+  },
+  packageProcessingText: {
     fontSize: 14,
     color: '#9b59b6',
     fontWeight: '600',
+    marginBottom: 4,
+  },
+  packageProcessingDepartment: {
+    fontSize: 12,
+    color: '#9b59b6',
   },
   processingNote: {
     fontSize: 12,
@@ -1874,10 +2431,12 @@ const styles = StyleSheet.create({
   },
   // Success Styles
   successContainer: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+  successHeader: {
     alignItems: 'center',
-    padding: 40,
-    flex: 1,
-    justifyContent: 'center',
+    marginBottom: 24,
   },
   successIcon: {
     width: 100,
@@ -1886,14 +2445,39 @@ const styles = StyleSheet.create({
     backgroundColor: '#27ae60',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 16,
   },
   successTitle: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#27ae60',
-    marginBottom: 24,
+    marginBottom: 16,
     textAlign: 'center',
+  },
+  memberInfoSuccess: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  memberNameSuccess: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#2c3e50',
+  },
+  departmentSuccess: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#e3f2fd',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  departmentSuccessText: {
+    fontSize: 14,
+    color: '#1976d2',
+    fontWeight: '600',
   },
   transactionDetails: {
     backgroundColor: '#f8f9fa',
@@ -1922,26 +2506,172 @@ const styles = StyleSheet.create({
     color: '#2c3e50',
     fontWeight: '600',
   },
-  successFeatures: {
-    backgroundColor: '#e8f5e9',
+  cardPreviewSection: {
+    backgroundColor: 'white',
     borderRadius: 16,
     padding: 20,
-    width: '100%',
     marginBottom: 24,
     borderWidth: 2,
-    borderColor: '#c8e6c9',
-  },
-  featureItem: {
-    flexDirection: 'row',
+    borderColor: '#e9ecef',
     alignItems: 'center',
-    gap: 12,
+  },
+  cardPreviewTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  cardPreviewNote: {
+    fontSize: 12,
+    color: '#3498db',
+    textAlign: 'center',
+    marginTop: 16,
+    fontStyle: 'italic',
+  },
+  cardContainer: {
+    alignItems: 'center',
+    width: '100%',
+  },
+  card: {
+    width: 350,
+    backgroundColor: 'white',
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  cardHeader: {
+    backgroundColor: '#3498db',
+    padding: 20,
+    alignItems: 'center',
+  },
+  cardHeaderTitle: {
+    color: 'white',
+    fontSize: 22,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  cardHeaderSubtitle: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 1,
+  },
+  cardBody: {
+    flexDirection: 'row',
+    padding: 20,
+    alignItems: 'flex-start',
+  },
+  cardPhotoContainer: {
+    marginRight: 20,
+  },
+  cardPhoto: {
+    width: 100,
+    height: 120,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#3498db',
+  },
+  cardPhotoPlaceholder: {
+    width: 100,
+    height: 120,
+    borderRadius: 8,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#3498db',
+  },
+  cardInfo: {
+    flex: 1,
+  },
+  cardName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    marginBottom: 8,
+  },
+  cardPosition: {
+    fontSize: 14,
+    color: '#3498db',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  cardDepartment: {
+    fontSize: 12,
+    color: '#9b59b6',
+    fontWeight: '600',
     marginBottom: 12,
   },
-  featureText: {
-    fontSize: 14,
-    color: '#27ae60',
-    fontWeight: '600',
+  cardDetails: {
+    gap: 8,
+    marginBottom: 12,
+  },
+  cardDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  cardDetailText: {
+    fontSize: 13,
+    color: '#666',
     flex: 1,
+  },
+  cardFooter: {
+    padding: 16,
+    backgroundColor: '#f8f9fa',
+    borderTopWidth: 1,
+    borderTopColor: '#e9ecef',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  cardNumberContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  cardNumber: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2c3e50',
+  },
+  cardChurch: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
+  successActions: {
+    gap: 12,
+    marginBottom: 24,
+  },
+  successButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    borderRadius: 12,
+    gap: 10,
+  },
+  downloadButton: {
+    backgroundColor: '#3498db',
+  },
+  shareButton: {
+    backgroundColor: '#9b59b6',
+  },
+  invoiceButton: {
+    backgroundColor: '#27ae60',
+  },
+  successButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   successMessage: {
     fontSize: 16,
@@ -1952,6 +2682,14 @@ const styles = StyleSheet.create({
   },
   successSpinner: {
     marginTop: 20,
+    alignSelf: 'center',
+  },
+  successClosing: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    marginTop: 8,
+    fontStyle: 'italic',
+    textAlign: 'center',
   },
   footer: {
     padding: 20,

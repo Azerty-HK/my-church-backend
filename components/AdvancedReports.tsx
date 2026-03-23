@@ -31,6 +31,7 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
   const [members, setMembers] = useState<Member[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month' | 'year'>('month');
   const [generatingReport, setGeneratingReport] = useState(false);
+  const [reportType, setReportType] = useState<'comprehensive' | 'financial' | 'members' | null>(null);
 
   useEffect(() => {
     if (visible && church) {
@@ -87,18 +88,52 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
     if (!church || !user) return;
     
     setGeneratingReport(true);
+    setReportType('comprehensive');
+    
     try {
+      // Calculer les dates pour la période sélectionnée
+      const endDate = new Date();
+      const startDate = new Date();
+      
+      switch (selectedPeriod) {
+        case 'week':
+          startDate.setDate(endDate.getDate() - 7);
+          break;
+        case 'month':
+          startDate.setMonth(endDate.getMonth() - 1);
+          break;
+        case 'year':
+          startDate.setFullYear(endDate.getFullYear() - 1);
+          break;
+      }
+      
       const period = `${selectedPeriod === 'week' ? 'Semaine' : selectedPeriod === 'month' ? 'Mois' : 'Année'} courante`;
       
-      const report = ReportGenerator.generateComprehensiveReport(
+      // Calculer les statistiques nécessaires
+      const totalIncome = reports.reduce((sum, r) => sum + Number(r.amount), 0);
+      const totalExpenses = expenses.filter(e => e.is_approved).reduce((sum, e) => sum + Number(e.amount), 0);
+      const netBalance = totalIncome - totalExpenses;
+      
+      // Préparer les données pour le rapport
+      const reportData = {
         church,
         members,
         reports,
         expenses,
-        [],
-        period
-      );
+        totalIncome,
+        totalExpenses,
+        netBalance,
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0],
+        period,
+        reportDate: new Date().toLocaleDateString(),
+        generatedBy: user.name || user.email
+      };
+      
+      // Générer le rapport
+      const report = ReportGenerator.generateComprehensiveReport(reportData);
 
+      // Partager le rapport
       await Share.share({
         message: report,
         title: `Rapport complet - ${church.name} - ${period}`,
@@ -115,9 +150,11 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
       });
 
     } catch (error) {
-      Alert.alert('Erreur', 'Impossible de générer le rapport');
+      console.error('❌ Erreur génération rapport complet:', error);
+      Alert.alert('Erreur', 'Impossible de générer le rapport complet');
     } finally {
       setGeneratingReport(false);
+      setReportType(null);
     }
   };
 
@@ -125,15 +162,45 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
     if (!church || !user) return;
     
     setGeneratingReport(true);
+    setReportType('financial');
+    
     try {
+      // Calculer les dates pour la période sélectionnée
+      const endDate = new Date();
+      const startDate = new Date();
+      
+      switch (selectedPeriod) {
+        case 'week':
+          startDate.setDate(endDate.getDate() - 7);
+          break;
+        case 'month':
+          startDate.setMonth(endDate.getMonth() - 1);
+          break;
+        case 'year':
+          startDate.setFullYear(endDate.getFullYear() - 1);
+          break;
+      }
+      
       const period = `${selectedPeriod === 'week' ? 'Semaine' : selectedPeriod === 'month' ? 'Mois' : 'Année'} courante`;
+      
+      // Calculer les statistiques financières
+      const totalIncome = reports.reduce((sum, r) => sum + Number(r.amount), 0);
+      const totalExpenses = expenses.filter(e => e.is_approved).reduce((sum, e) => sum + Number(e.amount), 0);
+      const netBalance = totalIncome - totalExpenses;
       
       const report = ReportGenerator.generateFinancialReport(
         church,
         reports,
         expenses,
         period,
-        { includeDetails: true }
+        { 
+          includeDetails: true,
+          startDate: startDate.toISOString().split('T')[0],
+          endDate: endDate.toISOString().split('T')[0],
+          totalIncome,
+          totalExpenses,
+          netBalance
+        }
       );
 
       await Share.share({
@@ -152,9 +219,11 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
       });
 
     } catch (error) {
+      console.error('❌ Erreur génération rapport financier:', error);
       Alert.alert('Erreur', 'Impossible de générer le rapport financier');
     } finally {
       setGeneratingReport(false);
+      setReportType(null);
     }
   };
 
@@ -162,6 +231,8 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
     if (!church || !user) return;
     
     setGeneratingReport(true);
+    setReportType('members');
+    
     try {
       const period = `${selectedPeriod === 'week' ? 'Semaine' : selectedPeriod === 'month' ? 'Mois' : 'Année'} courante`;
       
@@ -169,7 +240,12 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
         church,
         members,
         period,
-        { includeDetails: true }
+        { 
+          includeDetails: true,
+          totalMembers: members.length,
+          staffCount: members.filter(m => m.member_type === 'Personnel').length,
+          activeDepartments: [...new Set(members.flatMap(m => m.departments || []))].length
+        }
       );
 
       await Share.share({
@@ -188,9 +264,11 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
       });
 
     } catch (error) {
+      console.error('❌ Erreur génération rapport membres:', error);
       Alert.alert('Erreur', 'Impossible de générer le rapport des membres');
     } finally {
       setGeneratingReport(false);
+      setReportType(null);
     }
   };
 
@@ -248,7 +326,7 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
                   <Text style={styles.summaryValue}>
                     {formatCurrency(totalIncome, church?.currency || 'FC')}
                   </Text>
-                  <Text style={styles.summaryLabel}>Revenus totaux</Text>
+                  <Text style={styles.summaryLabel}>comptes rendus totaux</Text>
                 </View>
                 <View style={styles.summaryCard}>
                   <Text style={[styles.summaryValue, { color: '#e74c3c' }]}>
@@ -277,7 +355,9 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
                 >
                   <TrendingUpIcon size={20} color="#27ae60" />
                   <Text style={styles.reportButtonText}>Rapport financier détaillé</Text>
-                  {generatingReport && <ActivityIndicator size="small" color="#27ae60" />}
+                  {generatingReport && reportType === 'financial' && (
+                    <ActivityIndicator size="small" color="#27ae60" />
+                  )}
                 </TouchableOpacity>
 
                 <TouchableOpacity 
@@ -287,7 +367,9 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
                 >
                   <FileText size={20} color="#3498db" />
                   <Text style={styles.reportButtonText}>Rapport des membres</Text>
-                  {generatingReport && <ActivityIndicator size="small" color="#3498db" />}
+                  {generatingReport && reportType === 'members' && (
+                    <ActivityIndicator size="small" color="#3498db" />
+                  )}
                 </TouchableOpacity>
 
                 <TouchableOpacity 
@@ -297,7 +379,9 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
                 >
                   <BarChart3 size={20} color="#9b59b6" />
                   <Text style={styles.reportButtonText}>Rapport complet</Text>
-                  {generatingReport && <ActivityIndicator size="small" color="#9b59b6" />}
+                  {generatingReport && reportType === 'comprehensive' && (
+                    <ActivityIndicator size="small" color="#9b59b6" />
+                  )}
                 </TouchableOpacity>
               </View>
             )}
@@ -311,7 +395,7 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
                 <View style={styles.statGrid}>
                   <View style={styles.statItem}>
                     <Text style={styles.statValue}>{reports.length}</Text>
-                    <Text style={styles.statLabel}>Transactions revenus</Text>
+                    <Text style={styles.statLabel}>Transactions comptes rendus</Text>
                   </View>
                   <View style={styles.statItem}>
                     <Text style={styles.statValue}>{expenses.length}</Text>
@@ -321,7 +405,7 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
                     <Text style={styles.statValue}>
                       {totalIncome > 0 ? ((totalExpenses / totalIncome) * 100).toFixed(1) : 0}%
                     </Text>
-                    <Text style={styles.statLabel}>Ratio dépenses/revenus</Text>
+                    <Text style={styles.statLabel}>Ratio dépenses/comptes rendus</Text>
                   </View>
                 </View>
               </View>
@@ -355,6 +439,7 @@ export function AdvancedReports({ visible, onClose }: AdvancedReportsProps) {
   );
 }
 
+// Les styles restent exactement les mêmes...
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -533,4 +618,4 @@ const styles = StyleSheet.create({
     color: '#7f8c8d',
     textAlign: 'center',
   },
-});
+}); 

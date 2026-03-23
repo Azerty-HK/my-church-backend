@@ -19,10 +19,10 @@ Les 3 interfaces complètes pour les rôles **Trésorier**, **Lecteur**, et **Se
 
 #### Dashboard (Accueil)
 - ✅ **Cartes statistiques**:
-  - Total des revenus du mois
+  - Total des comptes rendus du mois
   - Total des dépenses du mois
   - Solde actuel
-- ✅ **Graphique**: Revenus/Dépenses sur 7 derniers jours (LineChart)
+- ✅ **Graphique**: Comptes rendus/Dépenses sur 7 derniers jours (LineChart)
 - ✅ **Raccourcis Actions rapides**:
   - Ajouter revenu → redirige vers Finance
   - Ajouter dépense → redirige vers Finance

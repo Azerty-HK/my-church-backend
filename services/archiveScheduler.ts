@@ -1,6 +1,6 @@
 import { DatabaseService } from '../lib/database';
 import { ArchiveManager } from '../utils/archiveManager';
-import * as Notifications from 'expo-notifications';
+import { NotificationService } from './NotificationService';
 
 export class ArchiveScheduler {
   private static checkInterval: NodeJS.Timeout | null = null;
@@ -35,34 +35,29 @@ export class ArchiveScheduler {
   }
 
   /**
-   * Vérifie et crée les archives si nécessaire
+   * Vérifie et crée les archives de manière rétroactive si nécessaire
    */
-  private static async checkAndCreateArchives(churchId: string) {
+  static async checkAndCreateArchives(churchId: string) {
     try {
       const now = new Date();
       const currentDate = now.toISOString().split('T')[0];
 
-      // Éviter de vérifier plusieurs fois le même jour
-      if (this.lastCheckDate === currentDate) {
+      // Éviter de vérifier plusieurs fois la même heure dans un délai de 5 minutes
+      const lastCheck = this.lastCheckDate;
+      const currentCheck = now.getTime();
+      if (lastCheck && (currentCheck - parseInt(lastCheck)) < 5 * 60 * 1000) {
         return;
       }
 
-      this.lastCheckDate = currentDate;
+      this.lastCheckDate = currentCheck.toString();
 
-      const day = now.getDate();
-      const month = now.getMonth() + 1;
+      console.log(`📅 Vérification des archives (rétroactive)`);
 
-      console.log(`📅 Vérification archives - Date: ${currentDate}, Jour: ${day}, Mois: ${month}`);
+      // Archive mensuelle: vérifie toujours le mois précédent
+      await this.createMonthlyArchive(churchId, now);
 
-      // Archive mensuelle : chaque 1er du mois
-      if (day === 1) {
-        await this.createMonthlyArchive(churchId, now);
-      }
-
-      // Archive annuelle : chaque 1er janvier
-      if (day === 1 && month === 1) {
-        await this.createYearlyArchive(churchId, now);
-      }
+      // Archive annuelle: vérifie toujours l'année précédente
+      await this.createYearlyArchive(churchId, now);
     } catch (error) {
       console.error('❌ Erreur vérification archives:', error);
     }
@@ -101,11 +96,19 @@ export class ArchiveScheduler {
       if (result.success) {
         console.log('✅ Archive mensuelle créée avec succès');
 
-        // Envoyer une notification à l'admin
+        // Envoyer une notification push
         await this.sendArchiveNotification(
           'Archive mensuelle créée',
           `L'archive de ${this.getMonthName(month)} ${year} a été créée automatiquement.`
         );
+
+        // Envoyer une notification in-app
+        await DatabaseService.createNotification({
+          church_id: churchId,
+          title: '📁 Archive mensuelle créée',
+          message: `L'archive automatique de ${this.getMonthName(month)} ${year} a été générée avec succès.`,
+          type: 'info'
+        });
 
         // Log l'événement
         const church = await DatabaseService.getChurchById(churchId);
@@ -157,11 +160,19 @@ export class ArchiveScheduler {
       if (result.success) {
         console.log('✅ Archive annuelle créée avec succès');
 
-        // Envoyer une notification à l'admin
+        // Envoyer une notification push
         await this.sendArchiveNotification(
           'Archive annuelle créée',
           `L'archive de l'année ${previousYear} a été créée automatiquement.`
         );
+
+        // Envoyer une notification in-app
+        await DatabaseService.createNotification({
+          church_id: churchId,
+          title: '📁 Archive annuelle créée',
+          message: `L'archive automatique de l'année ${previousYear} a été générée avec succès.`,
+          type: 'info'
+        });
 
         // Log l'événement
         const church = await DatabaseService.getChurchById(churchId);
@@ -190,15 +201,7 @@ export class ArchiveScheduler {
    */
   private static async sendArchiveNotification(title: string, body: string) {
     try {
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title,
-          body,
-          sound: true,
-          priority: Notifications.AndroidNotificationPriority.DEFAULT,
-        },
-        trigger: null, // Notification immédiate
-      });
+      await NotificationService.scheduleLocalNotification(title, body, {});
     } catch (error) {
       console.error('❌ Erreur envoi notification:', error);
     }

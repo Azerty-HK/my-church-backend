@@ -1,5 +1,11 @@
 import { Tabs } from 'expo-router';
-import { Chrome as Home, Users, DollarSign, FileText, Settings } from 'lucide-react-native';
+import {
+  Chrome as Home,
+  Users,
+  DollarSign,
+  FileText,
+  Settings,
+} from 'lucide-react-native';
 import { useChurch } from '../../contexts/ChurchContext';
 import { getThemeColors } from '../../lib/theme';
 
@@ -10,6 +16,7 @@ export default function TabLayout() {
 
   return (
     <Tabs
+      initialRouteName="index"
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.primary,
@@ -29,7 +36,8 @@ export default function TabLayout() {
         tabBarIconStyle: {
           marginBottom: 4,
         },
-      }}>
+      }}
+    >
       <Tabs.Screen
         name="index"
         options={{
@@ -39,6 +47,7 @@ export default function TabLayout() {
           ),
         }}
       />
+
       <Tabs.Screen
         name="members"
         options={{
@@ -48,6 +57,7 @@ export default function TabLayout() {
           ),
         }}
       />
+
       <Tabs.Screen
         name="finance"
         options={{
@@ -57,6 +67,7 @@ export default function TabLayout() {
           ),
         }}
       />
+
       <Tabs.Screen
         name="reports"
         options={{
@@ -66,6 +77,7 @@ export default function TabLayout() {
           ),
         }}
       />
+
       <Tabs.Screen
         name="settings"
         options={{
