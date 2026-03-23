@@ -1,6 +1,6 @@
 FROM node:20-slim
 
-# On installe les outils de build pour les dépendances natives (ex: better-sqlite3)
+# Outils de build pour native modules
 RUN apt-get update && apt-get install -y \
     python3 \
     make \
@@ -9,18 +9,20 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# On installe les dépendances
+# Installation des dépendances
 COPY package*.json ./
 RUN npm install
 
-# On installe ts-node globalement pour être sûr qu'il soit dans le PATH
-RUN npm install -g ts-node typescript
-
-# On copie tout le reste
+# Copie du code
 COPY . .
 
-# On expose le port (Render utilise PORT env var, mais on expose 3000 par défaut)
+# Compilation du backend en JavaScript
+RUN npm run build:backend
+
+# Nettoyage des devDependencies (Optionnel mais recommandé pour la prod)
+# RUN npm prune --production
+
 EXPOSE 3000
 
-# On lance avec ts-node directement via npx pour être sûr
-CMD ["npx", "ts-node", "--transpile-only", "backend/server.ts"]
+# Lancement de la version compilée (beaucoup plus léger et stable)
+CMD ["node", "backend/dist/backend/server.js"]

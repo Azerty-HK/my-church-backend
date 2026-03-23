@@ -14,7 +14,8 @@
     "init-db": "ts-node init-db.ts",
     "init-db:with-sample": "ts-node init-db.ts --sample-data",
     "backend": "ts-node -e \"require('dotenv/config')\" backend/server.ts",
-    "backend:init": "ts-node -e \"require('dotenv/config')\" backend/init-db.ts"
+    "backend:init": "ts-node -e \"require('dotenv/config')\" backend/init-db.ts",
+    "build:backend": "tsc -p backend/tsconfig.json"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
